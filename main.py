@@ -1,5 +1,5 @@
 """
-AudioBatch Converter — v11 — 08/07/2026
+AudioBatch Converter — v12 — 03/11/2026
 """
 
 import sys
@@ -40,7 +40,7 @@ def _show_error(title: str, msg: str):
 
 def _ensure_deps() -> bool:
     """
-    Install missing dependencies (PyQt6, mutagen).
+    Install missing dependencies (PyQt6, mutagen, Pillow).
     Returns True if something was just installed (restart needed),
     False if everything was already present.
     """
@@ -53,6 +53,10 @@ def _ensure_deps() -> bool:
         import mutagen  # noqa
     except ImportError:
         missing.append("mutagen")
+    try:
+        import PIL  # noqa
+    except ImportError:
+        missing.append("Pillow")
 
     if not missing:
         return False
@@ -182,9 +186,9 @@ def main():
         try:
             from ui.ffmpeg_downloader_window import FFmpegDownloaderWindow
             downloader = FFmpegDownloaderWindow(ffmpeg_mgr)
-            result = downloader.exec()
-            if result != 1:
-                sys.exit(0)
+            # Refus du téléchargement : l'app s'ouvre quand même (le mode
+            # Images n'utilise pas FFmpeg ; l'audio signalera son absence)
+            downloader.exec()
         except Exception as e:
             _show_error("Erreur fenêtre FFmpeg", str(e))
             sys.exit(1)

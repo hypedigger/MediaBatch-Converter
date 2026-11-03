@@ -2,8 +2,8 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 11
-APP_DATE = "08/07/2026"
+APP_VERSION = 12
+APP_DATE = "03/11/2026"
 APP_TITLE = f"AudioBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
 if getattr(sys, "frozen", False):
@@ -118,10 +118,71 @@ PARALLEL_OPTIONS = [
     {"label": "Automatique (selon charge CPU)",   "value": 0},
 ]
 
+# ── Mode Images ──────────────────────────────────────────────────────────────
+
+# Nom affiché → extensions (minuscules, sans point)
+IMAGE_INPUT_FORMATS = {
+    "JPEG":     ["jpg", "jpeg", "jfif"],
+    "PNG":      ["png"],
+    "WEBP":     ["webp"],
+    "TIFF":     ["tif", "tiff"],
+    "BMP":      ["bmp"],
+    "JPEG2000": ["jp2", "j2k"],
+}
+
+# "pil" = nom du format pour Pillow ; "quality" = curseur de qualité utilisable
+IMAGE_OUTPUT_FORMATS = [
+    {
+        "id": "jpeg",
+        "label": "JPEG",
+        "description": "Universel. 85 = très bon compromis, 75 = compression forte.",
+        "ext": "jpg",
+        "pil": "JPEG",
+        "quality": True,
+        "default_quality": 85,
+    },
+    {
+        "id": "jp2",
+        "label": "JPEG 2000",
+        "description": "Dégradation plus douce que JPEG (flou plutôt que blocs). Peu de logiciels le lisent. Lent. 100 = sans perte.",
+        "ext": "jp2",
+        "pil": "JPEG2000",
+        "quality": True,
+        "default_quality": 80,
+    },
+    {
+        "id": "webp",
+        "label": "WebP",
+        "description": "Format web moderne, ~30 % plus léger que JPEG. 100 = sans perte.",
+        "ext": "webp",
+        "pil": "WEBP",
+        "quality": True,
+        "default_quality": 85,
+    },
+    {
+        "id": "png",
+        "label": "PNG — sans perte",
+        "description": "Aucune perte de qualité. Idéal pour captures d'écran et dessins, lourd pour les photos.",
+        "ext": "png",
+        "pil": "PNG",
+        "quality": False,
+        "default_quality": 100,
+    },
+]
+
+# Côté le plus long en pixels (0 = taille d'origine)
+IMAGE_RESIZE_OPTIONS = [0, 4096, 3840, 2560, 2048, 1920, 1600, 1280, 1024]
+
 DEFAULT_SETTINGS = {
     "theme":             "dark",
     "parallel":          8,
     "last_directory":    "",
     "selected_formats":  list(SUPPORTED_INPUT_FORMATS.keys()),
     "default_output_format": "mp3_320",
+    "mode":                  "audio",   # "audio" | "image"
+    "image_selected_formats": ["JPEG", "PNG"],
+    "image_output_format":   "jpeg",
+    "image_quality":         {},        # id de format → qualité choisie
+    "image_max_side":        0,
+    "image_keep_if_larger":  True,
 }

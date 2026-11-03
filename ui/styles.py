@@ -615,5 +615,41 @@ QTabBar::tab:selected { background: rgba(100,80,210,140); color: white; }
 """
 
 
+# Bascule Audio / Images de la barre de titre
+_MODE_DARK = """
+QPushButton#btn_mode {
+    background: rgba(255, 255, 255, 5);
+    border: 1px solid rgba(255, 255, 255, 14);
+    border-radius: 6px;
+    padding: 3px 14px;
+    color: rgba(255, 255, 255, 140);
+    font-size: 12px;
+}
+QPushButton#btn_mode:hover { background: rgba(255, 255, 255, 12); color: white; }
+QPushButton#btn_mode:checked {
+    background: rgba(110, 88, 220, 170);
+    border-color: rgba(170, 130, 255, 140);
+    color: white;
+}
+"""
+
+_MODE_LIGHT = """
+QPushButton#btn_mode {
+    background: rgba(0, 0, 0, 4);
+    border: 1px solid rgba(0, 0, 0, 14);
+    border-radius: 6px;
+    padding: 3px 14px;
+    color: rgba(30, 20, 60, 150);
+    font-size: 12px;
+}
+QPushButton#btn_mode:hover { background: rgba(0, 0, 0, 10); }
+QPushButton#btn_mode:checked {
+    background: rgba(100, 80, 210, 160);
+    border-color: rgba(100, 80, 210, 200);
+    color: white;
+}
+"""
+
+
 def get_theme(name: str) -> str:
-    return LIGHT_THEME if name == "light" else DARK_THEME
+    return LIGHT_THEME + _MODE_LIGHT if name == "light" else DARK_THEME + _MODE_DARK

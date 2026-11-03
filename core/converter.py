@@ -90,10 +90,11 @@ class ConversionThread(QThread):
                 completed += 1
 
                 try:
-                    out_path = future.result()   # str returned by _convert_one
+                    # _convert_one → chemin de sortie, ou (chemin, message)
+                    res = future.result()
+                    out_path, msg = res if isinstance(res, tuple) else (res, "")
                     success  = True
-                    msg      = ""
-                    log_export.info("OK  %s  →  %s", fi.path, out_path)
+                    log_export.info("OK  %s  →  %s  %s", fi.path, out_path, msg)
                 except Exception as exc:
                     out_path = ""
                     success  = False

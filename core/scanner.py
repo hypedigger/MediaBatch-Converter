@@ -40,17 +40,17 @@ def file_info_from_path(path: str) -> Optional[FileInfo]:
     )
 
 
-def scan_directory(root: str, extensions: List[str]) -> List[FileInfo]:
+def scan_directory(root: str, extensions: List[str], recursive: bool = True) -> List[FileInfo]:
     """
-    Recursively scan *root* and return FileInfo for every file whose
-    extension (lowercase, no dot) is in *extensions*.
+    Scan *root* (recursively by default) and return FileInfo for every file
+    whose extension (lowercase, no dot) is in *extensions*.
     """
     exts = {e.lower().lstrip(".") for e in extensions}
     results: List[FileInfo] = []
 
     for dirpath, dirs, files in os.walk(root):
         # Prune excluded directories in-place so os.walk won't descend into them
-        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS]
+        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS] if recursive else []
         for filename in files:
             ext = os.path.splitext(filename)[1].lstrip(".").lower()
             if ext not in exts:

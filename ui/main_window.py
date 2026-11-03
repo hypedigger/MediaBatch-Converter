@@ -9,14 +9,18 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QFileDialog, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QProgressBar, QSizePolicy, QFrame, QAbstractItemView,
-    QMessageBox, QDialog, QScrollArea, QMenu,
+    QMessageBox, QDialog, QScrollArea, QMenu, QSlider, QStackedWidget,
+    QButtonGroup,
 )
 from PyQt6.QtGui import QFont, QCursor
 
 from core.config    import (APP_TITLE, SUPPORTED_INPUT_FORMATS, OUTPUT_FORMATS,
-                             DEFAULT_SETTINGS, CONFIG_FILE)
+                             IMAGE_INPUT_FORMATS, IMAGE_OUTPUT_FORMATS,
+                             IMAGE_RESIZE_OPTIONS, DEFAULT_SETTINGS, CONFIG_FILE)
 from core.scanner   import FileInfo, scan_directory, file_info_from_path
 from core.converter import ConversionThread, detect_conflicts
+from core.image_converter import ImageConversionThread, SKIPPED
+from core.image_estimator import EstimateThread, Estimate
 from core.logger    import get_app_logger
 from core.tags      import is_editable
 from ui.styles      import get_theme
@@ -26,6 +30,14 @@ from ui.log_window  import LogWindow
 from ui.settings_dialog import SettingsDialog
 from ui.tag_editor_dialog import TagEditorDialog
 from ui.preview_player import PreviewPlayer
+from ui.folder_analysis_window import FolderAnalysisWindow, fmt_bytes
+
+# Formats d'entrée par mode : nom affiché → liste d'extensions
+_INPUT_FORMATS = {
+    "audio": {name: [ext] for name, ext in SUPPORTED_INPUT_FORMATS.items()},
+    "image": IMAGE_INPUT_FORMATS,
+}
+_SELECTED_KEY = {"audio": "selected_formats", "image": "image_selected_formats"}
 
 
 # ── Sortable table items ──────────────────────────────────────────────────────
@@ -221,6 +233,16 @@ class MainWindow(QMainWindow):
         self._resize_geom   = None
         self._RESIZE_MARGIN = 8
         self._conv_summary: dict = {}
+        self._mode = self._settings.get("mode", "audio")
+        if self._mode not in _INPUT_FORMATS:
+            self._mode = "audio"
+        self._estimate_thread: Optional[EstimateThread] = None
+        self._estimate_pending = False
+        self._analysis_window: Optional[FolderAnalysisWindow] = None
+        self._estimate_timer = QTimer(self)
+        self._estimate_timer.setSingleShot(True)
+        self._estimate_timer.setInterval(400)
+        self._estimate_timer.timeout.connect(self._run_estimate)
 
         self.setWindowIcon(create_app_icon())
         self.setWindowFlags(
@@ -235,6 +257,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_theme()
+        self._apply_mode()
 
     # ═════════════════════════════════════════════════════════════════════════
     # UI BUILD
@@ -271,15 +294,32 @@ class MainWindow(QMainWindow):
         lay.setSpacing(0)
 
         # Icon
-        icon = QLabel("🎵")
-        icon.setFont(QFont("Segoe UI Emoji", 16))
-        icon.setStyleSheet("margin-right:8px;")
-        lay.addWidget(icon)
+        self._title_icon = QLabel("🎵")
+        self._title_icon.setFont(QFont("Segoe UI Emoji", 16))
+        self._title_icon.setStyleSheet("margin-right:8px;")
+        lay.addWidget(self._title_icon)
 
         # Title
         lbl = QLabel(APP_TITLE)
         lbl.setObjectName("title_label")
         lay.addWidget(lbl)
+        lay.addSpacing(24)
+
+        # Mode Audio / Images (retenu d'une session à l'autre)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_buttons = {}
+        for mode, txt in (("audio", "🎵  Audio"), ("image", "🖼  Images")):
+            b = QPushButton(txt)
+            b.setObjectName("btn_mode")
+            b.setCheckable(True)
+            b.setFixedHeight(28)
+            b.setChecked(mode == self._mode)
+            b.clicked.connect(lambda _c, m=mode: self._set_mode(m))
+            self._mode_group.addButton(b)
+            self._mode_buttons[mode] = b
+            lay.addWidget(b)
+            lay.addSpacing(4)
         lay.addStretch()
 
         # Log button
@@ -384,22 +424,28 @@ class MainWindow(QMainWindow):
         scroll.setFixedHeight(34)
         scroll.setStyleSheet("background: transparent;")
 
-        fmt_inner = QWidget()
-        fmt_inner.setStyleSheet("background: transparent;")
-        fmt_lay = QHBoxLayout(fmt_inner)
-        fmt_lay.setContentsMargins(0, 0, 0, 0)
-        fmt_lay.setSpacing(10)
+        # Une rangée de cases par mode ; la pile affiche celle du mode courant
+        self._fmt_stack = QStackedWidget()
+        self._fmt_stack.setStyleSheet("background: transparent;")
+        self._format_checks_by_mode = {}
+        for mode, formats in _INPUT_FORMATS.items():
+            fmt_inner = QWidget()
+            fmt_inner.setStyleSheet("background: transparent;")
+            fmt_lay = QHBoxLayout(fmt_inner)
+            fmt_lay.setContentsMargins(0, 0, 0, 0)
+            fmt_lay.setSpacing(10)
+            checks = {}
+            selected = self._settings.get(_SELECTED_KEY[mode], list(formats.keys()))
+            for name in formats:
+                cb = QCheckBox(name)
+                cb.setChecked(name in selected)
+                checks[name] = cb
+                fmt_lay.addWidget(cb)
+            fmt_lay.addStretch()
+            self._format_checks_by_mode[mode] = checks
+            self._fmt_stack.addWidget(fmt_inner)
 
-        self._format_checks = {}
-        selected = self._settings.get("selected_formats", list(SUPPORTED_INPUT_FORMATS.keys()))
-        for name in SUPPORTED_INPUT_FORMATS:
-            cb = QCheckBox(name)
-            cb.setChecked(name in selected)
-            self._format_checks[name] = cb
-            fmt_lay.addWidget(cb)
-        fmt_lay.addStretch()
-
-        scroll.setWidget(fmt_inner)
+        scroll.setWidget(self._fmt_stack)
         fmt_row.addWidget(scroll, 1)
 
         # All / None shortcuts
@@ -409,6 +455,13 @@ class MainWindow(QMainWindow):
         btn_none.clicked.connect(lambda: self._set_all_formats(False))
         fmt_row.addWidget(btn_all)
         fmt_row.addWidget(btn_none)
+
+        self._btn_analyze = QPushButton("🔍  Analyser les sous-dossiers")
+        self._btn_analyze.setToolTip(
+            "Estime, pour chaque sous-dossier, le gain de place avec le format de sortie choisi"
+        )
+        self._btn_analyze.clicked.connect(self._open_analysis)
+        fmt_row.addWidget(self._btn_analyze)
 
         btn_scan = QPushButton("  Afficher les fichiers  ")
         btn_scan.setObjectName("btn_primary")
@@ -513,6 +566,53 @@ class MainWindow(QMainWindow):
         self._progress_row.hide()
         lay.addWidget(self._progress_row)
 
+        # Image options row (mode Images uniquement)
+        self._img_opts_row = QWidget()
+        io_lay = QHBoxLayout(self._img_opts_row)
+        io_lay.setContentsMargins(0, 0, 0, 0)
+        io_lay.setSpacing(12)
+
+        self._lbl_quality = QLabel("Qualité :")
+        self._lbl_quality.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
+        io_lay.addWidget(self._lbl_quality)
+        self._slider_quality = QSlider(Qt.Orientation.Horizontal)
+        self._slider_quality.setRange(1, 100)
+        self._slider_quality.setFixedWidth(160)
+        self._slider_quality.valueChanged.connect(self._on_quality_changed)
+        io_lay.addWidget(self._slider_quality)
+        self._lbl_quality_val = QLabel("85")
+        self._lbl_quality_val.setFixedWidth(28)
+        io_lay.addWidget(self._lbl_quality_val)
+
+        io_lay.addSpacing(12)
+        lbl_size = QLabel("Côté max :")
+        lbl_size.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
+        io_lay.addWidget(lbl_size)
+        self._combo_max_side = QComboBox()
+        cur_side = self._settings.get("image_max_side", 0)
+        for i, px in enumerate(IMAGE_RESIZE_OPTIONS):
+            self._combo_max_side.addItem("Taille d'origine" if px == 0 else f"{px} px", userData=px)
+            if px == cur_side:
+                self._combo_max_side.setCurrentIndex(i)
+        self._combo_max_side.currentIndexChanged.connect(self._on_image_option_changed)
+        io_lay.addWidget(self._combo_max_side)
+
+        io_lay.addSpacing(12)
+        self._chk_keep = QCheckBox("Garder l'original si le résultat est plus lourd")
+        self._chk_keep.setChecked(self._settings.get("image_keep_if_larger", True))
+        self._chk_keep.toggled.connect(self._on_image_option_changed)
+        io_lay.addWidget(self._chk_keep)
+
+        io_lay.addStretch()
+        self._lbl_estimate = QLabel()
+        self._lbl_estimate.setObjectName("label_count")
+        self._lbl_estimate.setToolTip(
+            "Estimation : une partie de la sélection est convertie en mémoire\n"
+            "et le résultat extrapolé à l'ensemble des fichiers."
+        )
+        io_lay.addWidget(self._lbl_estimate)
+        lay.addWidget(self._img_opts_row)
+
         # Controls row
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(12)
@@ -522,22 +622,18 @@ class MainWindow(QMainWindow):
         lbl_fmt.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
         ctrl_row.addWidget(lbl_fmt)
 
+        # Rempli selon le mode par _apply_mode()
         self._combo_out_fmt = QComboBox()
         self._combo_out_fmt.setMinimumWidth(260)
-        default_id = self._settings.get("default_output_format", "mp3_320")
-        for i, fmt in enumerate(OUTPUT_FORMATS):
-            self._combo_out_fmt.addItem(fmt["label"], userData=fmt)
-            if fmt["id"] == default_id:
-                self._combo_out_fmt.setCurrentIndex(i)
         self._combo_out_fmt.currentIndexChanged.connect(self._on_format_changed)
         ctrl_row.addWidget(self._combo_out_fmt)
 
         # Description label
         self._lbl_fmt_desc = QLabel()
         self._lbl_fmt_desc.setObjectName("label_desc")
+        self._lbl_fmt_desc.setWordWrap(True)
         self._lbl_fmt_desc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         ctrl_row.addWidget(self._lbl_fmt_desc, 1)
-        self._update_fmt_desc()
 
         # Delete source checkbox
         self._chk_delete = QCheckBox("Supprimer la source après conversion")
@@ -575,7 +671,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._status_lbl)
         lay.addStretch()
 
-        ver_lbl = QLabel(f"v{APP_TITLE.split('—')[1].strip()}")
+        ver_lbl = QLabel(APP_TITLE.split('—')[1].strip())
         ver_lbl.setObjectName("status_label")
         lay.addWidget(ver_lbl)
         return sb
@@ -592,6 +688,17 @@ class MainWindow(QMainWindow):
             self._settings["last_directory"] = path
             self._save_settings()
 
+    @property
+    def _format_checks(self) -> dict:
+        return self._format_checks_by_mode[self._mode]
+
+    def _selected_exts(self) -> List[str]:
+        return [ext for name, exts in _INPUT_FORMATS[self._mode].items()
+                if self._format_checks[name].isChecked() for ext in exts]
+
+    def _all_exts(self) -> set:
+        return {ext for exts in _INPUT_FORMATS[self._mode].values() for ext in exts}
+
     def _set_all_formats(self, state: bool):
         for cb in self._format_checks.values():
             cb.setChecked(state)
@@ -602,8 +709,7 @@ class MainWindow(QMainWindow):
             self._set_status("Veuillez sélectionner un répertoire valide.")
             return
 
-        selected_fmts = [ext for name, ext in SUPPORTED_INPUT_FORMATS.items()
-                         if self._format_checks[name].isChecked()]
+        selected_fmts = self._selected_exts()
         if not selected_fmts:
             self._set_status("Veuillez sélectionner au moins un format.")
             return
@@ -731,6 +837,7 @@ class MainWindow(QMainWindow):
 
         act_tags      = menu.addAction("🏷  Éditer les tags…")
         act_tags.setEnabled(file_exists and is_editable(fi.extension))
+        act_tags.setVisible(self._mode == "audio")
         menu.addSeparator()
         act_open_dir  = menu.addAction("📂  Ouvrir le répertoire")
         act_open_file = menu.addAction("▶  Ouvrir le fichier")
@@ -890,9 +997,8 @@ class MainWindow(QMainWindow):
             return
         event.acceptProposedAction()
 
-        selected_fmts = [ext for name, ext in SUPPORTED_INPUT_FORMATS.items()
-                         if self._format_checks[name].isChecked()]
-        all_exts = set(SUPPORTED_INPUT_FORMATS.values())
+        selected_fmts = self._selected_exts()
+        all_exts = self._all_exts()
 
         new_files: List[FileInfo] = []
         for d in dirs:
@@ -931,14 +1037,183 @@ class MainWindow(QMainWindow):
             self._btn_convert.setText(f"  ▶  Convertir  ({count})  ")
         else:
             self._btn_convert.setText("  ▶  Convertir  ")
+        self._schedule_estimate()
 
     def _on_format_changed(self):
         self._update_fmt_desc()
+        fmt = self._combo_out_fmt.currentData()
+        if self._mode == "image" and fmt:
+            self._settings["image_output_format"] = fmt["id"]
+            q = self._settings.get("image_quality", {}).get(fmt["id"], fmt["default_quality"])
+            self._slider_quality.blockSignals(True)
+            self._slider_quality.setValue(q)
+            self._slider_quality.blockSignals(False)
+            self._lbl_quality_val.setText(str(q) if fmt["quality"] else "—")
+            for w in (self._lbl_quality, self._slider_quality, self._lbl_quality_val):
+                w.setEnabled(fmt["quality"])
+            self._schedule_estimate()
 
     def _update_fmt_desc(self):
         fmt = self._combo_out_fmt.currentData()
         if fmt:
             self._lbl_fmt_desc.setText(fmt.get("description", ""))
+
+    # ── Mode Audio / Images ───────────────────────────────────────────────────
+
+    def _set_mode(self, mode: str):
+        if mode == self._mode:
+            return
+        if self._thread and self._thread.isRunning():
+            # Pas de changement de mode en pleine conversion
+            self._mode_buttons[self._mode].setChecked(True)
+            self._set_status("Conversion en cours — changement de mode impossible.")
+            return
+        self._save_settings()
+        self._mode = mode
+        self._settings["mode"] = mode
+        self._files = []
+        self._populate_table()
+        self._lbl_count.setText("Aucun fichier — glissez un dossier ici")
+        self._apply_mode()
+        self._save_settings()
+
+    def _apply_mode(self):
+        image = self._mode == "image"
+        self._mode_buttons[self._mode].setChecked(True)
+        self._title_icon.setText("🖼" if image else "🎵")
+        self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
+        self._btn_analyze.setVisible(image)
+        self._img_opts_row.setVisible(image)
+        self._lbl_estimate.clear()
+        # Pré-écoute et tags n'ont de sens qu'en audio
+        self._table.setColumnHidden(COL_PLAY, image)
+        if image:
+            self._preview.stop_and_hide()
+
+        formats = IMAGE_OUTPUT_FORMATS if image else OUTPUT_FORMATS
+        default_id = self._settings.get(
+            "image_output_format" if image else "default_output_format", formats[0]["id"])
+        self._combo_out_fmt.blockSignals(True)
+        self._combo_out_fmt.clear()
+        for i, fmt in enumerate(formats):
+            self._combo_out_fmt.addItem(fmt["label"], userData=fmt)
+            if fmt["id"] == default_id:
+                self._combo_out_fmt.setCurrentIndex(i)
+        self._combo_out_fmt.blockSignals(False)
+        self._on_format_changed()
+
+    def _image_options(self):
+        """(format, qualité, côté max, garder si plus léger) du mode Images."""
+        fmt = self._combo_out_fmt.currentData()
+        quality = self._slider_quality.value() if fmt["quality"] else 100
+        return fmt, quality, self._combo_max_side.currentData(), self._chk_keep.isChecked()
+
+    def _image_options_summary(self) -> str:
+        fmt, quality, max_side, keep = self._image_options()
+        parts = [fmt["label"]]
+        if fmt["quality"]:
+            parts.append(f"qualité {quality}")
+        parts.append(f"côté max {max_side} px" if max_side else "taille d'origine")
+        if keep:
+            parts.append("original gardé si plus léger")
+        return ", ".join(parts)
+
+    def _on_quality_changed(self, value: int):
+        self._lbl_quality_val.setText(str(value))
+        fmt = self._combo_out_fmt.currentData()
+        if fmt:
+            self._settings.setdefault("image_quality", {})[fmt["id"]] = value
+        self._schedule_estimate()
+
+    def _on_image_option_changed(self, *_):
+        self._settings["image_max_side"]       = self._combo_max_side.currentData()
+        self._settings["image_keep_if_larger"] = self._chk_keep.isChecked()
+        self._schedule_estimate()
+
+    # ── Estimation de la taille (mode Images) ─────────────────────────────────
+
+    def _schedule_estimate(self):
+        if self._mode != "image":
+            return
+        self._estimate_timer.start()      # relancé à chaque changement (anti-rebond)
+
+    def _run_estimate(self):
+        if self._mode != "image":
+            return
+        if self._estimate_thread and self._estimate_thread.isRunning():
+            # Résultat bientôt périmé : on l'abandonne et on relance à la fin
+            self._estimate_thread.cancel()
+            self._estimate_pending = True
+            return
+        files = self._get_selected_files()
+        if not files:
+            self._lbl_estimate.setText("")
+            return
+        fmt, quality, max_side, keep = self._image_options()
+        self._lbl_estimate.setText(f"Estimation en cours…  ({len(files)} image(s))")
+        self._estimate_thread = EstimateThread(
+            files, fmt, quality, max_side, keep,
+            parallel=os.cpu_count() or 4,
+        )
+        self._estimate_thread.finished_estimate.connect(self._on_estimate)
+        self._estimate_thread.finished.connect(self._on_estimate_thread_finished)
+        self._estimate_thread.start()
+
+    def _on_estimate_thread_finished(self):
+        if self._estimate_pending:
+            self._estimate_pending = False
+            self._run_estimate()
+
+    def _on_estimate(self, est: Optional[Estimate]):
+        if self._estimate_pending or est is None or self._mode != "image":
+            return
+        approx = "" if est.exact else "≈ "
+        margin = "" if est.exact else f"  (± {est.margin * 100:.0f} %)"
+        sign = "−" if est.gain_pct >= 0 else "+"
+        self._lbl_estimate.setText(
+            f"Sélection : {fmt_bytes(est.src_bytes)}  →  {approx}{fmt_bytes(est.est_bytes)}"
+            f"   {sign}{abs(est.gain_pct):.0f} %{margin}"
+        )
+        self._lbl_estimate.setToolTip(
+            f"{est.n_samples} image(s) convertie(s) en test sur {est.n_files}.\n"
+            "Le reste est extrapolé d'après la qualité et la taille de chaque fichier."
+        )
+
+    # ── Analyse des sous-dossiers ─────────────────────────────────────────────
+
+    def _analysis_options(self) -> tuple:
+        fmt, quality, max_side, keep = self._image_options()
+        parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
+        return (self._dir_edit.text().strip(), self._selected_exts(), fmt, quality,
+                max_side, keep, parallel, self._image_options_summary())
+
+    def _open_analysis(self):
+        path = self._dir_edit.text().strip()
+        if not path or not os.path.isdir(path):
+            self._set_status("Veuillez sélectionner un répertoire valide.")
+            return
+        if not self._selected_exts():
+            self._set_status("Veuillez sélectionner au moins un format.")
+            return
+        if self._analysis_window is None:
+            self._analysis_window = FolderAnalysisWindow(
+                self._analysis_options, theme=self._settings.get("theme", "dark"))
+            self._analysis_window.setStyleSheet(self.styleSheet())
+            self._analysis_window.load_requested.connect(self._load_folder)
+        self._analysis_window.show()
+        self._analysis_window.raise_()
+        self._analysis_window.start()
+
+    def _load_folder(self, directory: str):
+        """Charge un dossier (sans ses sous-dossiers) et sélectionne tout."""
+        self._files = scan_directory(directory, self._selected_exts(), recursive=False)
+        self._populate_table()
+        self._set_all_checked(True)
+        n = len(self._files)
+        self._lbl_count.setText(f"{n} fichier(s) — {directory}")
+        self._set_status(f"{n} fichier(s) chargé(s) depuis l'analyse")
+        self.raise_()
+        self.activateWindow()
 
     # ── Conversion ────────────────────────────────────────────────────────────
 
@@ -966,8 +1241,9 @@ class MainWindow(QMainWindow):
         from core.ffmpeg_manager import FFmpegManager
         from core.config import FFMPEG_DIR
 
+        image = self._mode == "image"
         ffmpeg = FFmpegManager()
-        if not ffmpeg.is_available():
+        if not image and not ffmpeg.is_available():
             self._set_status("FFmpeg introuvable.")
             return
 
@@ -995,6 +1271,8 @@ class MainWindow(QMainWindow):
 
         # Stop preview: release any file lock before converting/deleting
         self._preview.stop_and_hide()
+        if self._estimate_thread and self._estimate_thread.isRunning():
+            self._estimate_thread.cancel()
 
         # Get parallel setting
         parallel = self._settings.get("parallel", 8)
@@ -1012,6 +1290,7 @@ class MainWindow(QMainWindow):
         self._conv_summary = {
             "total":        len(selected),
             "success":      [],   # list of source paths
+            "skipped":      [],   # images laissées intactes (résultat plus lourd)
             "failed":       [],   # list of (basename, error_msg)
             "source_size":  sum(f.size for f in selected),
             "output_size":  0,
@@ -1021,14 +1300,27 @@ class MainWindow(QMainWindow):
         }
 
         # Start thread
-        self._thread = ConversionThread(
-            files         = selected,
-            ffmpeg_path   = ffmpeg.get_ffmpeg_path(),
-            out_fmt       = out_fmt,
-            parallel      = parallel,
-            delete_source = delete,
-            conflict      = conflict_mode,
-        )
+        if image:
+            _fmt, quality, max_side, keep = self._image_options()
+            self._thread = ImageConversionThread(
+                files          = selected,
+                out_fmt        = out_fmt,
+                quality        = quality,
+                max_side       = max_side,
+                keep_if_larger = keep,
+                parallel       = parallel,
+                delete_source  = delete,
+                conflict       = conflict_mode,
+            )
+        else:
+            self._thread = ConversionThread(
+                files         = selected,
+                ffmpeg_path   = ffmpeg.get_ffmpeg_path(),
+                out_fmt       = out_fmt,
+                parallel      = parallel,
+                delete_source = delete,
+                conflict      = conflict_mode,
+            )
         self._thread.progress_updated.connect(self._on_progress)
         self._thread.file_completed.connect(self._on_file_done)
         self._thread.all_done.connect(self._on_all_done)
@@ -1046,7 +1338,10 @@ class MainWindow(QMainWindow):
 
     def _on_file_done(self, src_path: str, out_path: str, success: bool, msg: str):
         s = self._conv_summary
-        if success:
+        if success and msg == SKIPPED:
+            s["skipped"].append(src_path)
+            s["output_size"] += os.path.getsize(src_path)   # l'original reste
+        elif success:
             s["success"].append(src_path)
             if out_path and os.path.exists(out_path):
                 s["output_size"] += os.path.getsize(out_path)
@@ -1107,6 +1402,14 @@ class MainWindow(QMainWindow):
         lbl_ok = QLabel(f"✓  {n_ok} fichier(s) converti(s) avec succès")
         lbl_ok.setStyleSheet("color: rgba(160,240,160,200); font-size:13px;")
         lay.addWidget(lbl_ok)
+
+        n_skip = len(s.get("skipped", []))
+        if n_skip:
+            lbl_skip = QLabel(f"=  {n_skip} image(s) gardée(s) telle(s) quelle(s) "
+                              "(la conversion les aurait alourdies)")
+            lbl_skip.setWordWrap(True)
+            lbl_skip.setStyleSheet("color: rgba(200,200,220,170); font-size:13px;")
+            lay.addWidget(lbl_skip)
 
         if n_fail:
             lbl_err = QLabel(f"✗  {n_fail} fichier(s) en erreur :")
@@ -1210,6 +1513,8 @@ class MainWindow(QMainWindow):
         # Propagate theme to open log window
         if self._log_window:
             self._log_window.apply_stylesheet(self.styleSheet())
+        if self._analysis_window:
+            self._analysis_window.setStyleSheet(self.styleSheet())
 
     def _apply_theme(self):
         theme = self._settings.get("theme", "dark")
@@ -1239,10 +1544,11 @@ class MainWindow(QMainWindow):
         return s
 
     def _save_settings(self):
-        # Persist currently checked formats
-        self._settings["selected_formats"] = [
-            name for name, cb in self._format_checks.items() if cb.isChecked()
-        ] if hasattr(self, "_format_checks") else self._settings.get("selected_formats", [])
+        # Persist currently checked formats (both modes)
+        for mode, checks in getattr(self, "_format_checks_by_mode", {}).items():
+            self._settings[_SELECTED_KEY[mode]] = [
+                name for name, cb in checks.items() if cb.isChecked()
+            ]
 
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -1342,6 +1648,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._save_settings()
         self._preview.stop()
+        if self._estimate_thread and self._estimate_thread.isRunning():
+            self._estimate_thread.cancel()
+            self._estimate_thread.wait(3000)
+        if self._analysis_window:
+            self._analysis_window.close()
         if self._log_window:
             self._log_window.close()
         super().closeEvent(event)
