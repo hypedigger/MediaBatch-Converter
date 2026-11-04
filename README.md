@@ -40,7 +40,13 @@ On a USB hard drive, analysing ~11,000 photos across 200 folders takes about 5 m
 - **FFmpeg auto-setup**: on first run the app offers to download FFmpeg (BtbN build) — nothing to install manually, nothing bundled in this repository.
 - Dark themed PyQt6 UI, detailed logs window.
 
-## Installation
+## Download
+
+Grab **`AudioBatch-Converter.exe`** from the [latest release](https://github.com/hypedigger/AudioBatch-Converter/releases/latest) — a single portable file, no Python needed. Put it in its own folder: settings, logs and the FFmpeg download are stored next to it.
+
+Windows SmartScreen may warn about an unsigned app: click *More info → Run anyway*.
+
+## Installation from source
 
 Requires **Windows** and **Python 3.12+**.
 
@@ -58,6 +64,8 @@ Optional — add the app to the Start menu (current user, no admin rights):
 ```powershell
 powershell -ExecutionPolicy Bypass -File create_shortcut.ps1
 ```
+
+Build the standalone exe yourself with `powershell -File build_exe.ps1` (output: `dist\AudioBatch-Converter.exe`).
 
 ## Usage
 

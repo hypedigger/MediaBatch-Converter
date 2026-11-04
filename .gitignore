@@ -11,3 +11,8 @@ __pycache__/
 *.pyc
 .claude/
 *.lnk
+
+# build PyInstaller
+build/
+dist/
+*.spec
