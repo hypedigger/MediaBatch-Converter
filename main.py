@@ -1,5 +1,5 @@
 """
-AudioBatch Converter — v13 — 04/11/2026
+MediaBatch Converter — v14 — 04/11/2026
 """
 
 import sys
@@ -72,7 +72,7 @@ def _ensure_deps() -> bool:
         from tkinter import ttk
 
         root = tk.Tk()
-        root.title("AudioBatch Converter — Installation")
+        root.title("MediaBatch Converter — Installation")
         root.geometry("420x140")
         root.resizable(False, False)
         root.configure(bg="#0e0e1a")
@@ -158,7 +158,7 @@ def main():
         sys.exit(1)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("AudioBatch Converter")
+    app.setApplicationName("MediaBatch Converter")
     app.setFont(QFont("Segoe UI Variable", 10))
 
     try:

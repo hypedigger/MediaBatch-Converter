@@ -80,7 +80,7 @@ def setup_loggers():
     _qt_handler_export.setFormatter(fmt_export)
     _export_logger.addHandler(_qt_handler_export)
 
-    _app_logger.info("AudioBatch Converter démarré — v%s", APP_VERSION)
+    _app_logger.info("MediaBatch Converter démarré — v%s", APP_VERSION)
 
 
 def get_app_logger() -> logging.Logger:

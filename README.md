@@ -1,10 +1,12 @@
-# 🎵 AudioBatch Converter
+# 🎵🖼 MediaBatch Converter
+
+*Formerly **AudioBatch Converter** — renamed in v14 now that it converts images too.*
 
 **Batch-convert your music library — FLAC, WAV, APE, OGG, M4A and more to MP3, OGG or Opus — with tags and cover art preserved. Now also batch-converts images (PNG/JPEG → JPEG, JPEG 2000, WebP) and tells you how much space you'll save before you start.**
 
 Point it at a folder: it scans everything, converts in parallel, keeps your metadata, and — in Images mode — estimates the size of the result before converting anything.
 
-![AudioBatch Converter](docs/screenshot.png)
+![MediaBatch Converter](docs/screenshot.png)
 
 ## Two modes
 
@@ -43,7 +45,7 @@ On a USB hard drive, analysing ~11,000 photos across 200 folders takes about 5 m
 
 ## Download
 
-Grab **`AudioBatch-Converter.exe`** from the [latest release](https://github.com/hypedigger/AudioBatch-Converter/releases/latest) — a single portable file, no Python needed. Put it in its own folder: settings, logs and the FFmpeg download are stored next to it.
+Grab **`MediaBatch-Converter.exe`** from the [latest release](https://github.com/hypedigger/MediaBatch-Converter/releases/latest) — a single portable file, no Python needed. Put it in its own folder: settings, logs and the FFmpeg download are stored next to it.
 
 Windows SmartScreen may warn about an unsigned app: click *More info → Run anyway*.
 
@@ -52,8 +54,8 @@ Windows SmartScreen may warn about an unsigned app: click *More info → Run any
 Requires **Windows** and **Python 3.12+**.
 
 ```bash
-git clone https://github.com/hypedigger/AudioBatch-Converter.git
-cd AudioBatch-Converter
+git clone https://github.com/hypedigger/MediaBatch-Converter.git
+cd MediaBatch-Converter
 pip install -r requirements.txt
 python main.py
 ```
@@ -66,7 +68,7 @@ Optional — add the app to the Start menu (current user, no admin rights):
 powershell -ExecutionPolicy Bypass -File create_shortcut.ps1
 ```
 
-Build the standalone exe yourself with `powershell -File build_exe.ps1` (output: `dist\AudioBatch-Converter.exe`).
+Build the standalone exe yourself with `powershell -File build_exe.ps1` (output: `dist\MediaBatch-Converter.exe`).
 
 ## Usage
 

@@ -1,4 +1,4 @@
-# Adds "AudioBatch Converter" to the Windows Start menu (current user, no admin rights).
+# Adds "MediaBatch Converter" to the Windows Start menu (current user, no admin rights).
 # Usage:  powershell -ExecutionPolicy Bypass -File create_shortcut.ps1
 
 $appDir  = $PSScriptRoot
@@ -8,7 +8,7 @@ if (-not $pythonw) {
     exit 1
 }
 
-$lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "AudioBatch Converter.lnk"
+$lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "MediaBatch Converter.lnk"
 $sh  = New-Object -ComObject WScript.Shell
 $s   = $sh.CreateShortcut($lnk)
 $s.TargetPath       = $pythonw

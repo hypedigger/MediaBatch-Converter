@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from typing import Dict, Tuple
 
-_USER_AGENT = "AudioBatchConverter/11 (+https://github.com/hypedigger/AudioBatch-Converter)"
+_USER_AGENT = "MediaBatchConverter/14 (+https://github.com/hypedigger/MediaBatch-Converter)"
 
 # Dossiers dont le nom ne doit PAS être pris pour un nom d'album
 _GENERIC_DIRS = {

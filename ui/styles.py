@@ -1,6 +1,6 @@
 DARK_THEME = """
 /* ═══════════════════════════════════════════════
-   AudioBatch Converter — Dark Theme
+   MediaBatch Converter — Dark Theme
    ═══════════════════════════════════════════════ */
 
 QWidget {
