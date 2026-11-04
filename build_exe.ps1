@@ -6,6 +6,8 @@ Set-Location $PSScriptRoot
 
 python -m pip install --quiet --upgrade pyinstaller
 python -m pip install --quiet -r requirements.txt
+# Icône régénérée depuis ui/icon.py (source unique)
+python -m ui.icon
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name "MediaBatch-Converter" `
     --icon assets\app.ico `

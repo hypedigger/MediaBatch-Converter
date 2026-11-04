@@ -27,6 +27,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.image_codec import encode_image, target_size
 from core.scanner     import FileInfo, scan_directory
+from core.logger      import get_app_logger
 
 INITIAL_SAMPLES = 12        # en dessous, la dispersion mesurée est trop optimiste
 SAMPLE_STEP     = 6
@@ -329,7 +330,8 @@ class FolderAnalysisThread(QThread):
                     break
                 try:
                     est = fut.result()
-                except Exception:
+                except Exception as e:
+                    get_app_logger().warning("Estimation impossible pour %s : %r", futures[fut], e)
                     est = None
                 if est is not None:
                     self.folder_done.emit(futures[fut], est)
