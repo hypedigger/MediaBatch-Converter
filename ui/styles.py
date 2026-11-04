@@ -253,9 +253,7 @@ QTableWidget::item:selected {
     background: rgba(110, 88, 220, 55);
     color: white;
 }
-QTableWidget::item:hover {
-    background: rgba(255, 255, 255, 5);
-}
+/* survol : ligne entière, dessiné par ui/table_style.py */
 QHeaderView {
     background: transparent;
 }
@@ -631,6 +629,42 @@ QPushButton#btn_mode:checked {
     border-color: rgba(170, 130, 255, 140);
     color: white;
 }
+
+/* Bouton « Estimer le gain d'espace » et action du toast : se démarque du violet */
+QPushButton#btn_accent {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(20, 160, 130, 230), stop:1 rgba(40, 190, 210, 230));
+    border: 1px solid rgba(120, 240, 220, 90);
+    border-radius: 8px;
+    padding: 7px 16px;
+    color: white;
+    font-weight: 600;
+}
+QPushButton#btn_accent:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(30, 185, 150, 255), stop:1 rgba(60, 210, 230, 255));
+}
+QPushButton#btn_accent:pressed { background: rgba(20, 140, 120, 255); }
+
+/* Petits boutons Tous / Aucun collés aux cases de formats */
+QPushButton#btn_chip {
+    background: rgba(255, 255, 255, 6);
+    border: 1px solid rgba(255, 255, 255, 14);
+    border-radius: 6px;
+    padding: 2px 10px;
+    color: rgba(255, 255, 255, 150);
+    font-size: 12px;
+}
+QPushButton#btn_chip:hover { background: rgba(255, 255, 255, 14); color: white; }
+
+#toast {
+    background: rgba(26, 30, 44, 245);
+    border: 1px solid rgba(80, 210, 190, 110);
+    border-radius: 12px;
+}
+#toast_label { color: rgba(235, 240, 255, 220); font-size: 13px; }
+QProgressBar#toast_bar { background: transparent; border: none; border-radius: 1px; }
+QProgressBar#toast_bar::chunk { background: rgba(80, 210, 190, 160); border-radius: 1px; }
 """
 
 _MODE_LIGHT = """
@@ -648,6 +682,36 @@ QPushButton#btn_mode:checked {
     border-color: rgba(100, 80, 210, 200);
     color: white;
 }
+
+QPushButton#btn_accent {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(16, 150, 120, 255), stop:1 rgba(30, 170, 200, 255));
+    border: none;
+    border-radius: 8px;
+    padding: 7px 16px;
+    color: white;
+    font-weight: 600;
+}
+QPushButton#btn_accent:hover { background: rgba(16, 165, 135, 255); }
+
+QPushButton#btn_chip {
+    background: rgba(0, 0, 0, 4);
+    border: 1px solid rgba(0, 0, 0, 14);
+    border-radius: 6px;
+    padding: 2px 10px;
+    color: rgba(30, 20, 60, 160);
+    font-size: 12px;
+}
+QPushButton#btn_chip:hover { background: rgba(0, 0, 0, 10); }
+
+#toast {
+    background: rgba(255, 255, 255, 250);
+    border: 1px solid rgba(16, 150, 120, 120);
+    border-radius: 12px;
+}
+#toast_label { color: #1A1A2E; font-size: 13px; }
+QProgressBar#toast_bar { background: transparent; border: none; }
+QProgressBar#toast_bar::chunk { background: rgba(16, 150, 120, 160); }
 """
 
 

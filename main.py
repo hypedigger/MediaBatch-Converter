@@ -1,5 +1,5 @@
 """
-AudioBatch Converter — v12 — 03/11/2026
+AudioBatch Converter — v13 — 04/11/2026
 """
 
 import sys

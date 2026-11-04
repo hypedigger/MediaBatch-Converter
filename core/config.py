@@ -2,8 +2,8 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 12
-APP_DATE = "03/11/2026"
+APP_VERSION = 13
+APP_DATE = "04/11/2026"
 APP_TITLE = f"AudioBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
 if getattr(sys, "frozen", False):

@@ -20,7 +20,8 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - PNG transparency is flattened onto white for JPEG.
 - **"Keep the original if the result is larger"** — re-compressing an already well-compressed JPEG never makes it heavier.
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
-- **Subfolder analysis**: scans every subfolder and lists, in a sortable table, where the conversion would free the most space. Double-click a folder to load it into the converter.
+- **Estimate space savings** (teal button): scans every subfolder and lists, in a sortable table, where the conversion would free the most space — gain % colour-coded from *worth it* (green) to *barely useful* (red). Sort by any column, even while it is still computing. Double-click a folder to load it into the converter.
+- When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds.
 
 ![Subfolder analysis](docs/screenshot-analysis.png)
 
@@ -70,7 +71,7 @@ Build the standalone exe yourself with `powershell -File build_exe.ps1` (output:
 ## Usage
 
 1. Pick **Audio** or **Images** in the title bar, then choose a folder — the scanner lists every convertible file.
-2. Pick the output format and quality (Images: check the size estimate, or run **Analyze subfolders** first).
+2. Pick the output format and quality (Images: check the size estimate, or click **Estimate space savings** first).
 3. Convert. Covers and tags (audio) or EXIF (images) follow automatically.
 4. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.
 

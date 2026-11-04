@@ -7,8 +7,11 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QPushButton, QTableWidget, QTableWidgetItem,
                               QHeaderView, QAbstractItemView, QProgressBar, QMenu)
 
+from PyQt6.QtGui          import QColor
+
 from core.image_estimator import Estimate, FolderAnalysisThread
 from ui.effects           import apply_acrylic
+from ui.table_style       import style_table, ACCENT_ROLE
 
 
 def fmt_bytes(b: float) -> str:
@@ -33,6 +36,18 @@ class _NumItem(QTableWidgetItem):
 
 
 C_DIR, C_COUNT, C_SRC, C_EST, C_GAIN, C_PCT, C_MARGIN = range(7)
+
+# Intérêt de la conversion selon le gain : (seuil %, couleur, libellé)
+GAIN_LEVELS = [
+    (50, "#5fe39a", "très rentable"),
+    (30, "#b5e46a", "rentable"),
+    (15, "#f0c060", "modeste"),
+    (-1e9, "#f07a7a", "peu utile"),
+]
+
+
+def gain_color(pct: float) -> QColor:
+    return QColor(next(c for t, c, _ in GAIN_LEVELS if pct >= t))
 
 
 class FolderAnalysisWindow(QWidget):
@@ -60,7 +75,7 @@ class FolderAnalysisWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(820, 480)
         self.resize(1000, 620)
-        self.setWindowTitle("Analyse des sous-dossiers")
+        self.setWindowTitle("Estimation du gain d'espace")
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -82,7 +97,7 @@ class FolderAnalysisWindow(QWidget):
         title_bar.setFixedHeight(40)
         tb_lay = QHBoxLayout(title_bar)
         tb_lay.setContentsMargins(16, 0, 8, 0)
-        lbl = QLabel("🔍  Analyse des sous-dossiers — gain estimé")
+        lbl = QLabel("📉  Estimation du gain d'espace — par dossier")
         lbl.setObjectName("title_label")
         tb_lay.addWidget(lbl)
         tb_lay.addStretch()
@@ -122,6 +137,8 @@ class FolderAnalysisWindow(QWidget):
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(34)
         self._table.setSortingEnabled(True)
+        self._table.horizontalHeader().setSortIndicatorShown(True)
+        style_table(self._table, self._theme)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(C_DIR, QHeaderView.ResizeMode.Stretch)
         for col, w in ((C_COUNT, 70), (C_SRC, 95), (C_EST, 95), (C_GAIN, 95),
@@ -133,6 +150,12 @@ class FolderAnalysisWindow(QWidget):
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
         c_lay.addWidget(self._table, 1)
+
+        legend = QLabel("&nbsp;&nbsp;&nbsp;".join(
+            f'<span style="color:{c}">●</span> {"&lt; 15" if t < 0 else f"≥ {t}"} % {lbl}'
+            for t, c, lbl in GAIN_LEVELS))
+        legend.setObjectName("label_desc")
+        c_lay.addWidget(legend)
 
         foot = QHBoxLayout()
         self._lbl_total = QLabel()
@@ -157,13 +180,14 @@ class FolderAnalysisWindow(QWidget):
         root, exts, out_fmt, quality, max_side, keep, parallel, summary = self._get_options()
         self._root = root
         self._lbl_opts.setText(f"Racine : {root}\nSortie : {summary}")
-        self._table.setSortingEnabled(False)
         self._table.setRowCount(0)
         self._n_folders = self._n_done = self._tot_src = self._tot_est = 0
         self._progress.setRange(0, 0)                 # indéterminé pendant le parcours
         self._lbl_total.setText("Parcours des dossiers…")
         self._btn_stop.setEnabled(True)
 
+        # Classement par défaut : plus gros gain en premier (modifiable à tout moment)
+        self._table.sortItems(C_GAIN, Qt.SortOrder.DescendingOrder)
         self._thread = FolderAnalysisThread(root, exts, out_fmt, quality,
                                             max_side, keep, parallel)
         self._thread.folders_found.connect(self._on_found)
@@ -196,6 +220,9 @@ class FolderAnalysisWindow(QWidget):
         self._progress.setValue(self._n_done)
 
         rel = os.path.relpath(directory, self._root)
+        # Insertion tri désactivé (sinon la ligne se déplace pendant qu'on la
+        # remplit), puis réactivation : le tri choisi par l'utilisateur reste
+        self._table.setSortingEnabled(False)
         row = self._table.rowCount()
         self._table.insertRow(row)
 
@@ -209,12 +236,16 @@ class FolderAnalysisWindow(QWidget):
 
         # Gain négatif (fichiers déjà très compressés) → signe « − » visible
         self._table.setItem(row, C_GAIN, _NumItem(est.gain_bytes, fmt_bytes(est.gain_bytes)))
-        self._table.setItem(row, C_PCT,  _NumItem(est.gain_pct, f"{est.gain_pct:.0f} %"))
+        it_pct = _NumItem(est.gain_pct, f"{est.gain_pct:.0f} %")
+        it_pct.setData(ACCENT_ROLE, gain_color(est.gain_pct))
+        it_pct.setToolTip(next(lbl for t, _c, lbl in GAIN_LEVELS if est.gain_pct >= t))
+        self._table.setItem(row, C_PCT, it_pct)
 
         m_label = "exacte" if est.exact else f"± {est.margin * 100:.0f} %"
         it_m = _NumItem(0 if est.exact else est.margin, m_label)
         it_m.setToolTip(f"{est.n_samples} image(s) convertie(s) en test sur {est.n_files}")
         self._table.setItem(row, C_MARGIN, it_m)
+        self._table.setSortingEnabled(True)
         self._update_total()
 
     def _on_done(self):
@@ -222,9 +253,6 @@ class FolderAnalysisWindow(QWidget):
         if self._progress.maximum() == 0:
             self._progress.setRange(0, 1)
         self._progress.setValue(self._progress.maximum())
-        self._table.setSortingEnabled(True)
-        # Classement par défaut : plus gros gain en premier
-        self._table.sortItems(C_GAIN, Qt.SortOrder.DescendingOrder)
         self._update_total(done=True)
 
     def _update_total(self, done: bool = False):
@@ -273,6 +301,11 @@ class FolderAnalysisWindow(QWidget):
 
     def _tb_release(self, _event):
         self._drag_pos = None
+
+    def apply_theme(self, qss: str, theme: str):
+        self._theme = theme
+        self.setStyleSheet(qss)
+        style_table(self._table, self._theme)
 
     def showEvent(self, event):
         super().showEvent(event)

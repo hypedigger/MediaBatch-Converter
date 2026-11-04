@@ -30,7 +30,9 @@ from ui.log_window  import LogWindow
 from ui.settings_dialog import SettingsDialog
 from ui.tag_editor_dialog import TagEditorDialog
 from ui.preview_player import PreviewPlayer
-from ui.folder_analysis_window import FolderAnalysisWindow, fmt_bytes
+from ui.folder_analysis_window import FolderAnalysisWindow, fmt_bytes, gain_color
+from ui.table_style import style_table
+from ui.toast       import Toast
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
 _INPUT_FORMATS = {
@@ -283,6 +285,8 @@ class MainWindow(QMainWindow):
         main_lay.addWidget(self._make_body(), 1)
         main_lay.addWidget(self._make_status_bar())
 
+        self._toast = Toast(self._central)
+
     # ── Title bar ─────────────────────────────────────────────────────────────
 
     def _make_title_bar(self) -> QWidget:
@@ -441,6 +445,13 @@ class MainWindow(QMainWindow):
                 cb.setChecked(name in selected)
                 checks[name] = cb
                 fmt_lay.addWidget(cb)
+            fmt_lay.addSpacing(6)
+            for txt, state in (("Tous", True), ("Aucun", False)):
+                b = QPushButton(txt)
+                b.setObjectName("btn_chip")
+                b.setFixedHeight(26)
+                b.clicked.connect(lambda _c, st=state: self._set_all_formats(st))
+                fmt_lay.addWidget(b)
             fmt_lay.addStretch()
             self._format_checks_by_mode[mode] = checks
             self._fmt_stack.addWidget(fmt_inner)
@@ -448,17 +459,11 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self._fmt_stack)
         fmt_row.addWidget(scroll, 1)
 
-        # All / None shortcuts
-        btn_all  = QPushButton("Tous")
-        btn_all.clicked.connect(lambda: self._set_all_formats(True))
-        btn_none = QPushButton("Aucun")
-        btn_none.clicked.connect(lambda: self._set_all_formats(False))
-        fmt_row.addWidget(btn_all)
-        fmt_row.addWidget(btn_none)
-
-        self._btn_analyze = QPushButton("🔍  Analyser les sous-dossiers")
+        self._btn_analyze = QPushButton("📉  Estimer le gain d'espace")
+        self._btn_analyze.setObjectName("btn_accent")
         self._btn_analyze.setToolTip(
-            "Estime, pour chaque sous-dossier, le gain de place avec le format de sortie choisi"
+            "Calcule, dossier par dossier, la place que la conversion ferait gagner\n"
+            "avec le format et la qualité choisis — sans rien modifier."
         )
         self._btn_analyze.clicked.connect(self._open_analysis)
         fmt_row.addWidget(self._btn_analyze)
@@ -508,7 +513,7 @@ class MainWindow(QMainWindow):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setShowGrid(False)
         self._table.verticalHeader().setVisible(False)
-        self._table.setAlternatingRowColors(False)
+        style_table(self._table, self._settings.get("theme", "dark"))
         self._table.setIconSize(QSize(0, 0))
 
         hdr = self._table.horizontalHeader()
@@ -687,6 +692,7 @@ class MainWindow(QMainWindow):
             self._dir_edit.setText(path)
             self._settings["last_directory"] = path
             self._save_settings()
+            self._suggest_estimate(path)
 
     @property
     def _format_checks(self) -> dict:
@@ -1015,6 +1021,7 @@ class MainWindow(QMainWindow):
             self._dir_edit.setText(dirs[0])
             self._settings["last_directory"] = dirs[0]
             self._save_settings()
+            self._suggest_estimate(dirs[0])
 
         existing = {f.path for f in self._files}
         added = [fi for fi in new_files if fi.path not in existing]
@@ -1083,6 +1090,8 @@ class MainWindow(QMainWindow):
         self._title_icon.setText("🖼" if image else "🎵")
         self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
         self._btn_analyze.setVisible(image)
+        if not image:
+            self._toast.dismiss()
         self._img_opts_row.setVisible(image)
         self._lbl_estimate.clear()
         # Pré-écoute et tags n'ont de sens qu'en audio
@@ -1170,9 +1179,10 @@ class MainWindow(QMainWindow):
         approx = "" if est.exact else "≈ "
         margin = "" if est.exact else f"  (± {est.margin * 100:.0f} %)"
         sign = "−" if est.gain_pct >= 0 else "+"
+        color = gain_color(est.gain_pct).name()
         self._lbl_estimate.setText(
             f"Sélection : {fmt_bytes(est.src_bytes)}  →  {approx}{fmt_bytes(est.est_bytes)}"
-            f"   {sign}{abs(est.gain_pct):.0f} %{margin}"
+            f"&nbsp;&nbsp; <b style='color:{color}'>{sign}{abs(est.gain_pct):.0f} %</b>{margin}"
         )
         self._lbl_estimate.setToolTip(
             f"{est.n_samples} image(s) convertie(s) en test sur {est.n_files}.\n"
@@ -1186,6 +1196,19 @@ class MainWindow(QMainWindow):
         parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
         return (self._dir_edit.text().strip(), self._selected_exts(), fmt, quality,
                 max_side, keep, parallel, self._image_options_summary())
+
+    def _suggest_estimate(self, path: str):
+        """Toast non bloquant proposant d'estimer le gain d'espace (mode Images)."""
+        if self._mode != "image":
+            return
+        name = os.path.basename(os.path.normpath(path)) or path
+        # Au-dessus du panneau du bas et de la barre d'état
+        self._central.toast_bottom_offset = (
+            self._panel_bottom.height() + self._status_lbl.parentWidget().height() + 26)
+        self._toast.show_message(
+            f"Voulez-vous savoir combien de place la conversion ferait gagner dans "
+            f"<b>{name}</b> et ses sous-dossiers ?",
+            "📉  Estimer", self._open_analysis)
 
     def _open_analysis(self):
         path = self._dir_edit.text().strip()
@@ -1514,12 +1537,13 @@ class MainWindow(QMainWindow):
         if self._log_window:
             self._log_window.apply_stylesheet(self.styleSheet())
         if self._analysis_window:
-            self._analysis_window.setStyleSheet(self.styleSheet())
+            self._analysis_window.apply_theme(self.styleSheet(), self._settings.get("theme", "dark"))
 
     def _apply_theme(self):
         theme = self._settings.get("theme", "dark")
         qss   = get_theme(theme)
         self.setStyleSheet(qss)
+        style_table(self._table, theme)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
