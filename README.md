@@ -51,7 +51,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first launch, accept the FFmpeg download (or point the app at an existing FFmpeg).
+On first launch, accept the FFmpeg download (or point the app at an existing FFmpeg) — only needed for audio.
+
+Optional — add the app to the Start menu (current user, no admin rights):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File create_shortcut.ps1
+```
 
 ## Usage
 
@@ -72,7 +78,7 @@ Settings and logs are local files (`config.json`, `logs/`) and are not part of t
 
 ## Support
 
-If AudioBatch Converter saved your library migration:
+If this tool saves you time, you can support its development on [Ko-fi](https://ko-fi.com/hypedigger).
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/hypedigger)
 
