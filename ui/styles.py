@@ -665,6 +665,27 @@ QPushButton#btn_chip:hover { background: rgba(255, 255, 255, 14); color: white; 
 #toast_label { color: rgba(235, 240, 255, 220); font-size: 13px; }
 QProgressBar#toast_bar { background: transparent; border: none; border-radius: 1px; }
 QProgressBar#toast_bar::chunk { background: rgba(80, 210, 190, 160); border-radius: 1px; }
+
+/* Arborescence du mode Images : même rendu que le tableau */
+QTreeWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+    selection-background-color: transparent;
+}
+QTreeWidget::item {
+    height: 36px;
+    padding: 0px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 5);
+    color: rgba(255, 255, 255, 200);
+}
+QTreeWidget::item:selected { background: rgba(110, 88, 220, 55); color: white; }
+QTreeWidget::branch { background: transparent; }
+QTreeView::indicator:indeterminate {
+    background: rgba(120, 90, 230, 140);
+    border: 2px solid rgba(160, 120, 255, 200);
+    border-radius: 4px;
+}
 """
 
 _MODE_LIGHT = """
@@ -712,6 +733,12 @@ QPushButton#btn_chip:hover { background: rgba(0, 0, 0, 10); }
 #toast_label { color: #1A1A2E; font-size: 13px; }
 QProgressBar#toast_bar { background: transparent; border: none; }
 QProgressBar#toast_bar::chunk { background: rgba(16, 150, 120, 160); }
+
+QTreeWidget { background: transparent; border: none; outline: none; }
+QTreeWidget::item { height: 36px; padding: 0 8px; border-bottom: 1px solid rgba(0,0,0,5); color: #1A1A2E; }
+QTreeWidget::item:selected { background: rgba(110, 88, 220, 40); }
+QTreeWidget::branch { background: transparent; }
+QTreeView::indicator:indeterminate { background: rgba(110, 88, 220, 120); border-radius: 4px; }
 """
 
 

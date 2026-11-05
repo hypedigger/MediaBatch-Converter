@@ -22,10 +22,11 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - PNG transparency is flattened onto white for JPEG.
 - **"Keep the original if the result is larger"** — re-compressing an already well-compressed JPEG never makes it heavier.
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
-- **Estimate space savings** (teal button): scans every subfolder and lists, in a sortable table, where the conversion would free the most space — gain % colour-coded from *worth it* (green) to *barely useful* (red). Sort by any column, even while it is still computing. Double-click a folder to load it into the converter.
+- **Folder view**: images are grouped by folder, folders start collapsed (images sitting directly in the chosen folder are listed on their own). Tick a folder to select all its images.
+- **Estimate space savings** (teal button): fills the *Estimated / Gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time; click again to stop.
 - When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds.
 
-![Subfolder analysis](docs/screenshot-analysis.png)
+![Space-savings estimate in the folder view](docs/screenshot-estimate.png)
 
 #### How the estimate works
 

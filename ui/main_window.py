@@ -30,7 +30,7 @@ from ui.log_window  import LogWindow
 from ui.settings_dialog import SettingsDialog
 from ui.tag_editor_dialog import TagEditorDialog
 from ui.preview_player import PreviewPlayer
-from ui.folder_analysis_window import FolderAnalysisWindow, fmt_bytes, gain_color
+from ui.image_tree  import ImageTreePanel, fmt_bytes, gain_color
 from ui.table_style import style_table
 from ui.toast       import Toast
 
@@ -240,7 +240,6 @@ class MainWindow(QMainWindow):
             self._mode = "audio"
         self._estimate_thread: Optional[EstimateThread] = None
         self._estimate_pending = False
-        self._analysis_window: Optional[FolderAnalysisWindow] = None
         self._estimate_timer = QTimer(self)
         self._estimate_timer.setSingleShot(True)
         self._estimate_timer.setInterval(400)
@@ -465,7 +464,7 @@ class MainWindow(QMainWindow):
             "Calcule, dossier par dossier, la place que la conversion ferait gagner\n"
             "avec le format et la qualité choisis — sans rien modifier."
         )
-        self._btn_analyze.clicked.connect(self._open_analysis)
+        self._btn_analyze.clicked.connect(self._toggle_estimate)
         fmt_row.addWidget(self._btn_analyze)
 
         btn_scan = QPushButton("  Afficher les fichiers  ")
@@ -540,7 +539,16 @@ class MainWindow(QMainWindow):
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
-        lay.addWidget(self._table, 1)
+
+        # Mode Images : arborescence par dossier, colonnes d'estimation intégrées
+        self._image_panel = ImageTreePanel(self._settings.get("theme", "dark"))
+        self._image_panel.selection_changed.connect(self._update_convert_btn)
+        self._image_panel.running_changed.connect(self._on_estimate_running)
+
+        self._list_stack = QStackedWidget()
+        self._list_stack.addWidget(self._table)
+        self._list_stack.addWidget(self._image_panel)
+        lay.addWidget(self._list_stack, 1)
         return panel
 
     # ── Bottom panel (conversion controls + progress) ─────────────────────────
@@ -722,10 +730,9 @@ class MainWindow(QMainWindow):
 
         self._set_status("Scan en cours…")
         self._files = scan_directory(path, selected_fmts)
-        self._populate_table()
+        self._refresh_list()
 
         n = len(self._files)
-        self._lbl_count.setText(f"{n} fichier(s) trouvé(s)")
         self._set_status(f"{n} fichier(s) trouvé(s) dans {path}")
         get_app_logger().info("Scan: %d fichiers dans %s", n, path)
 
@@ -776,7 +783,24 @@ class MainWindow(QMainWindow):
         self._hover_row = -1
         self._update_convert_btn()
 
+    def _refresh_list(self):
+        """Affiche self._files dans la liste du mode courant."""
+        if self._mode == "image":
+            self._image_panel.populate(self._files, self._dir_edit.text().strip())
+            n, d = self._image_panel.file_count(), self._image_panel.folder_count()
+            self._lbl_count.setText(
+                f"{n} image(s)" + (f" dans {d} dossier(s)" if d else "") if n
+                else "Aucune image — glissez un dossier ici")
+        else:
+            self._populate_table()
+            n = len(self._files)
+            self._lbl_count.setText(f"{n} fichier(s) trouvé(s)" if n
+                                    else "Aucun fichier — glissez un dossier ici")
+
     def _set_all_checked(self, state: bool):
+        if self._mode == "image":
+            self._image_panel.set_all_checked(state)
+            return
         self._table.blockSignals(True)
         cs = Qt.CheckState.Checked if state else Qt.CheckState.Unchecked
         for row in range(self._table.rowCount()):
@@ -1026,19 +1050,20 @@ class MainWindow(QMainWindow):
         existing = {f.path for f in self._files}
         added = [fi for fi in new_files if fi.path not in existing]
         self._files += added
-        self._populate_table()
+        self._refresh_list()
 
-        n = len(self._files)
-        self._lbl_count.setText(f"{n} fichier(s) trouvé(s)")
         self._set_status(f"{len(added)} fichier(s) ajouté(s) par glisser-déposer")
         get_app_logger().info("Drag & drop : %d fichier(s) ajouté(s)", len(added))
 
     def _update_convert_btn(self):
-        count = sum(
-            1 for row in range(self._table.rowCount())
-            if self._table.item(row, COL_CHECK) and
-               self._table.item(row, COL_CHECK).checkState() == Qt.CheckState.Checked
-        )
+        if self._mode == "image":
+            count = self._image_panel.checked_count()
+        else:
+            count = sum(
+                1 for row in range(self._table.rowCount())
+                if self._table.item(row, COL_CHECK) and
+                   self._table.item(row, COL_CHECK).checkState() == Qt.CheckState.Checked
+            )
         self._btn_convert.setEnabled(count > 0)
         if count > 0:
             self._btn_convert.setText(f"  ▶  Convertir  ({count})  ")
@@ -1058,6 +1083,7 @@ class MainWindow(QMainWindow):
             self._lbl_quality_val.setText(str(q) if fmt["quality"] else "—")
             for w in (self._lbl_quality, self._slider_quality, self._lbl_quality_val):
                 w.setEnabled(fmt["quality"])
+            self._image_panel.mark_stale()
             self._schedule_estimate()
 
     def _update_fmt_desc(self):
@@ -1079,9 +1105,9 @@ class MainWindow(QMainWindow):
         self._mode = mode
         self._settings["mode"] = mode
         self._files = []
-        self._populate_table()
-        self._lbl_count.setText("Aucun fichier — glissez un dossier ici")
+        self._image_panel.cancel_estimate(silent=True)
         self._apply_mode()
+        self._refresh_list()
         self._save_settings()
 
     def _apply_mode(self):
@@ -1090,6 +1116,7 @@ class MainWindow(QMainWindow):
         self._title_icon.setText("🖼" if image else "🎵")
         self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
         self._btn_analyze.setVisible(image)
+        self._list_stack.setCurrentWidget(self._image_panel if image else self._table)
         if not image:
             self._toast.dismiss()
         self._img_opts_row.setVisible(image)
@@ -1132,11 +1159,13 @@ class MainWindow(QMainWindow):
         fmt = self._combo_out_fmt.currentData()
         if fmt:
             self._settings.setdefault("image_quality", {})[fmt["id"]] = value
+        self._image_panel.mark_stale()
         self._schedule_estimate()
 
     def _on_image_option_changed(self, *_):
         self._settings["image_max_side"]       = self._combo_max_side.currentData()
         self._settings["image_keep_if_larger"] = self._chk_keep.isChecked()
+        self._image_panel.mark_stale()
         self._schedule_estimate()
 
     # ── Estimation de la taille (mode Images) ─────────────────────────────────
@@ -1189,13 +1218,7 @@ class MainWindow(QMainWindow):
             "Le reste est extrapolé d'après la qualité et la taille de chaque fichier."
         )
 
-    # ── Analyse des sous-dossiers ─────────────────────────────────────────────
-
-    def _analysis_options(self) -> tuple:
-        fmt, quality, max_side, keep = self._image_options()
-        parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
-        return (self._dir_edit.text().strip(), self._selected_exts(), fmt, quality,
-                max_side, keep, parallel, self._image_options_summary())
+    # ── Estimation du gain d'espace (colonnes de la liste) ────────────────────
 
     def _suggest_estimate(self, path: str):
         """Toast non bloquant proposant d'estimer le gain d'espace (mode Images)."""
@@ -1208,39 +1231,33 @@ class MainWindow(QMainWindow):
         self._toast.show_message(
             f"Voulez-vous savoir combien de place la conversion ferait gagner dans "
             f"<b>{name}</b> et ses sous-dossiers ?",
-            "📉  Estimer", self._open_analysis)
+            "📉  Estimer", self._start_estimate)
 
-    def _open_analysis(self):
-        path = self._dir_edit.text().strip()
-        if not path or not os.path.isdir(path):
-            self._set_status("Veuillez sélectionner un répertoire valide.")
-            return
-        if not self._selected_exts():
-            self._set_status("Veuillez sélectionner au moins un format.")
-            return
-        if self._analysis_window is None:
-            self._analysis_window = FolderAnalysisWindow(
-                self._analysis_options, theme=self._settings.get("theme", "dark"))
-            self._analysis_window.setStyleSheet(self.styleSheet())
-            self._analysis_window.load_requested.connect(self._load_folder)
-        self._analysis_window.show()
-        self._analysis_window.raise_()
-        self._analysis_window.start()
+    def _toggle_estimate(self):
+        if self._image_panel.is_running():
+            self._image_panel.cancel_estimate()
+        else:
+            self._start_estimate()
 
-    def _load_folder(self, directory: str):
-        """Charge un dossier (sans ses sous-dossiers) et sélectionne tout."""
-        self._files = scan_directory(directory, self._selected_exts(), recursive=False)
-        self._populate_table()
-        self._set_all_checked(True)
-        n = len(self._files)
-        self._lbl_count.setText(f"{n} fichier(s) — {directory}")
-        self._set_status(f"{n} fichier(s) chargé(s) depuis l'analyse")
-        self.raise_()
-        self.activateWindow()
+    def _start_estimate(self):
+        # Rien d'affiché : on charge d'abord le dossier choisi
+        if not self._image_panel.file_count():
+            self._scan_directory()
+        if not self._image_panel.file_count():
+            return
+        fmt, quality, max_side, keep = self._image_options()
+        parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
+        self._image_panel.start_estimate(fmt, quality, max_side, keep, parallel)
+
+    def _on_estimate_running(self, running: bool):
+        self._btn_analyze.setText("⏹  Arrêter l'estimation" if running
+                                  else "📉  Estimer le gain d'espace")
 
     # ── Conversion ────────────────────────────────────────────────────────────
 
     def _get_selected_files(self) -> List[FileInfo]:
+        if self._mode == "image":
+            return self._image_panel.checked_files()
         selected = []
         for row in range(self._table.rowCount()):
             chk = self._table.item(row, COL_CHECK)
@@ -1536,14 +1553,15 @@ class MainWindow(QMainWindow):
         # Propagate theme to open log window
         if self._log_window:
             self._log_window.apply_stylesheet(self.styleSheet())
-        if self._analysis_window:
-            self._analysis_window.apply_theme(self.styleSheet(), self._settings.get("theme", "dark"))
+
 
     def _apply_theme(self):
         theme = self._settings.get("theme", "dark")
         qss   = get_theme(theme)
         self.setStyleSheet(qss)
         style_table(self._table, theme)
+        if hasattr(self, "_image_panel"):
+            self._image_panel.apply_theme(theme)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1675,8 +1693,7 @@ class MainWindow(QMainWindow):
         if self._estimate_thread and self._estimate_thread.isRunning():
             self._estimate_thread.cancel()
             self._estimate_thread.wait(3000)
-        if self._analysis_window:
-            self._analysis_window.close()
+        self._image_panel.cancel_estimate(silent=True)
         if self._log_window:
             self._log_window.close()
         super().closeEvent(event)

@@ -1,16 +1,16 @@
 """
-Rendu commun des tableaux : lignes alternées, survol de la ligne entière
-et texte coloré par cellule.
+Rendu commun des listes (tableau audio, arborescence images) : lignes
+alternées, survol de la ligne entière et texte coloré par cellule.
 
-La feuille de style (QTableWidget::item { color: … }) écrase les couleurs
-posées avec setForeground() : le délégué dessine donc lui-même le texte des
-cellules qui portent une couleur (rôle ACCENT_ROLE).
+La feuille de style (::item { color: … }) écrase les couleurs posées avec
+setForeground() : le délégué dessine donc lui-même le texte des cellules qui
+portent une couleur (rôle ACCENT_ROLE).
 """
 
-from PyQt6.QtCore    import Qt, QEvent, QObject, QRect
+from PyQt6.QtCore    import Qt, QEvent, QObject, QRect, QPersistentModelIndex
 from PyQt6.QtGui     import QColor
 from PyQt6.QtWidgets import (QStyledItemDelegate, QStyleOptionViewItem, QStyle,
-                              QTableWidget, QApplication)
+                              QAbstractItemView, QApplication)
 
 ACCENT_ROLE = Qt.ItemDataRole.UserRole + 1     # QColor du texte de la cellule
 
@@ -22,15 +22,21 @@ _TINTS = {
 
 
 class _RowDelegate(QStyledItemDelegate):
-    def __init__(self, table: QTableWidget):
-        super().__init__(table)
-        self._table = table
-        self.hover_row = -1
+    def __init__(self, view: QAbstractItemView):
+        super().__init__(view)
+        self._view = view
+        self.hover = QPersistentModelIndex()     # 1re cellule de la ligne survolée
         self.theme = "dark"
+
+    def _is_hover(self, index) -> bool:
+        return self.hover.isValid() and index.siblingAtColumn(0) == self.hover
 
     def paint(self, painter, option, index):
         even, odd, hover = _TINTS.get(self.theme, _TINTS["dark"])
-        bg = hover if index.row() == self.hover_row else (odd if index.row() % 2 else even)
+        # Alternance selon la position à l'écran (vaut aussi pour une arborescence)
+        h = max(option.rect.height(), 1)
+        visual_row = (option.rect.top() + self._view.verticalScrollBar().value()) // h
+        bg = hover if self._is_hover(index) else (odd if visual_row % 2 else even)
         if bg.alpha():
             painter.fillRect(option.rect, bg)
 
@@ -56,33 +62,43 @@ class _RowDelegate(QStyledItemDelegate):
 
 
 class _HoverTracker(QObject):
-    def __init__(self, table: QTableWidget, delegate: _RowDelegate):
-        super().__init__(table)
-        self._table, self._delegate = table, delegate
+    def __init__(self, view: QAbstractItemView, delegate: _RowDelegate):
+        super().__init__(view)
+        self._view, self._delegate = view, delegate
 
     def eventFilter(self, obj, event):
         t = event.type()
         if t == QEvent.Type.MouseMove:
-            row = self._table.rowAt(int(event.position().y()))
-            if row != self._delegate.hover_row:
-                self._delegate.hover_row = row
-                self._table.viewport().update()
-        elif t == QEvent.Type.Leave and self._delegate.hover_row != -1:
-            self._delegate.hover_row = -1
-            self._table.viewport().update()
+            idx = self._view.indexAt(event.position().toPoint())
+            new = QPersistentModelIndex(idx.siblingAtColumn(0)) if idx.isValid() \
+                else QPersistentModelIndex()
+            if new != self._delegate.hover:
+                self._delegate.hover = new
+                self._view.viewport().update()
+        elif t == QEvent.Type.Leave and self._delegate.hover.isValid():
+            self._delegate.hover = QPersistentModelIndex()
+            self._view.viewport().update()
         return False
 
 
-def style_table(table: QTableWidget, theme: str = "dark"):
-    """Installe (ou met à jour le thème de) le rendu commun sur *table*."""
-    delegate = getattr(table, "_row_delegate", None)
+def style_table(view: QAbstractItemView, theme: str = "dark"):
+    """Installe (ou met à jour le thème de) le rendu commun sur *view*."""
+    delegate = getattr(view, "_row_delegate", None)
     if delegate is None:
-        delegate = _RowDelegate(table)
-        table._row_delegate = delegate
-        table.setItemDelegate(delegate)
-        table.setMouseTracking(True)
-        tracker = _HoverTracker(table, delegate)
-        table._hover_tracker = tracker
-        table.viewport().installEventFilter(tracker)
+        delegate = _RowDelegate(view)
+        view._row_delegate = delegate
+        view.setItemDelegate(delegate)
+        view.setMouseTracking(True)
+        # Défilement au pixel : l'alternance des lignes reste calée
+        view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        tracker = _HoverTracker(view, delegate)
+        view._hover_tracker = tracker
+        view.viewport().installEventFilter(tracker)
     delegate.theme = theme
-    table.viewport().update()
+    view.viewport().update()
+
+
+def set_hover_row(view: QAbstractItemView, index):
+    """Force la ligne survolée (captures d'écran)."""
+    view._row_delegate.hover = QPersistentModelIndex(index.siblingAtColumn(0))
+    view.viewport().update()

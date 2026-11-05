@@ -26,7 +26,7 @@ from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.image_codec import encode_image, target_size
-from core.scanner     import FileInfo, scan_directory
+from core.scanner     import FileInfo
 from core.logger      import get_app_logger
 
 INITIAL_SAMPLES = 12        # en dessous, la dispersion mesurée est trop optimiste
@@ -56,6 +56,9 @@ class Estimate:
     est_bytes: int
     n_samples: int
     margin:    float          # demi-largeur relative d'un intervalle à ~90 %
+    # Par fichier, dans l'ordre de la liste fournie : (octets estimés, mesuré ?)
+    # « mesuré » = l'image fait partie des conversions d'essai
+    per_file:  Optional[List[Tuple[int, bool]]] = None
 
     @property
     def exact(self) -> bool:
@@ -183,14 +186,27 @@ def estimate_files(
     executor=None,
     cancelled:      Callable[[], bool] = lambda: False,
     max_samples:    int = MAX_SAMPLES,
+    on_progress:    Optional[Callable[[str], None]] = None,
 ) -> Optional[Estimate]:
-    """Estimation du poids total après conversion. None si annulé ou vide."""
+    """
+    Estimation du poids total après conversion. None si annulé ou vide.
+    *on_progress("header" | "sample")* est appelé à chaque en-tête lu et à
+    chaque conversion d'essai (affichage de l'activité).
+    """
     if not files:
         return None
+    tick = on_progress or (lambda _kind: None)
     run = (lambda fn, items: list(executor.map(fn, items))) if executor \
         else (lambda fn, items: [fn(it) for it in items])
 
-    headers = run(_header, files)
+    def read_header(fi):
+        if cancelled():
+            return None
+        h = _header(fi)
+        tick("header")
+        return h
+
+    headers = run(read_header, files)
     if cancelled():
         return None
 
@@ -216,14 +232,20 @@ def estimate_files(
 
     readable = sum(len(g) for g in groups.values())
     if not readable:
-        return Estimate(len(files), sum(src), sum(src), 0, 0.0)
+        return Estimate(len(files), sum(src), sum(src), 0, 0.0,
+                        [(n, False) for n in src])
 
     strata = [_Stratum(g, base, x) for g in groups.values()]
     budget = min(max_samples, readable)
 
     def sample(stratum_picks: List[Tuple[_Stratum, List[int]]]):
         jobs = [(st, i) for st, picks in stratum_picks for i in picks]
-        sizes = run(lambda j: _encoded_size(files[j[1]], out_fmt, quality, max_side), jobs)
+        def encode(j):
+            n = _encoded_size(files[j[1]], out_fmt, quality, max_side)
+            tick("sample")
+            return n
+
+        sizes = run(encode, jobs)
         for (st, i), n in zip(jobs, sizes):
             if n is None:                       # échec d'encodage → inchangé
                 n = src[i]
@@ -254,12 +276,24 @@ def estimate_files(
         st = strata[max(open_k, key=lambda k: totals[k][1])]
         sample([(st, st.pick(min(SAMPLE_STEP, budget - n_done)))])
 
+    # Détail par image (illisibles : comptées inchangées)
+    per_file: List[Tuple[int, bool]] = [(n, False) for n in src]
+    for st in strata:
+        pred = st.fit()
+        for i in st.idx:
+            measured = i in st.sampled
+            v = st.sampled[i] if measured else pred(i)
+            if keep_if_larger:
+                v = min(v, src[i])
+            per_file[i] = (int(v), measured)
+
     return Estimate(
         n_files   = len(files),
         src_bytes = sum(src),
         est_bytes = int(est),
         n_samples = n_done,
         margin    = margin,
+        per_file  = per_file,
     )
 
 
@@ -287,41 +321,63 @@ class EstimateThread(QThread):
             self.finished_estimate.emit(est)
 
 
-class FolderAnalysisThread(QThread):
+class GroupEstimateThread(QThread):
     """
-    Parcourt *root* et estime, pour chaque dossier contenant des images
-    (ses fichiers propres, sans ses sous-dossiers), le gain de la conversion.
+    Estime le gain de la conversion pour chaque groupe d'images (un groupe =
+    les images d'un même dossier, telles qu'affichées dans la liste).
     """
 
-    folders_found = pyqtSignal(int)
-    folder_done   = pyqtSignal(str, object)     # chemin du dossier, Estimate
-    all_done      = pyqtSignal()
+    group_done = pyqtSignal(str, object)        # clé du groupe, Estimate
+    all_done   = pyqtSignal()
 
-    def __init__(self, root, exts, out_fmt, quality, max_side, keep_if_larger, parallel):
+    def __init__(self, groups: Dict[str, List[FileInfo]], out_fmt, quality, max_side,
+                 keep_if_larger, parallel):
         super().__init__()
-        self._root      = root
-        self._exts      = exts
+        self._groups    = groups
         self._opts      = (out_fmt, quality, max_side, keep_if_larger)
         self._parallel  = parallel
         self._cancelled = False
+        # Activité, lue par l'interface via snapshot() (simples compteurs)
+        self._lock      = threading.Lock()
+        self._phase     = "estimate"        # "estimate" → "done"
+        self._total     = sum(len(v) for v in groups.values())
+        self._headers   = 0                 # en-têtes lus
+        self._samples   = 0                 # conversions d'essai faites
+        self._current: Dict[str, int] = {}  # dossiers en cours → nb d'images
 
     def cancel(self):
         self._cancelled = True
 
+    def snapshot(self) -> dict:
+        with self._lock:
+            return dict(phase=self._phase, total=self._total, headers=self._headers,
+                        samples=self._samples, current=list(self._current))
+
+    def _on_progress(self, kind: str):
+        with self._lock:
+            if kind == "header":
+                self._headers += 1
+            else:
+                self._samples += 1
+
+    def _estimate_folder(self, directory: str, files: List[FileInfo]):
+        with self._lock:
+            self._current[directory] = len(files)
+        try:
+            return estimate_files(files, *self._opts, None, lambda: self._cancelled,
+                                  32, self._on_progress)
+        finally:
+            with self._lock:
+                self._current.pop(directory, None)
+
     def run(self):
-        by_dir: Dict[str, List[FileInfo]] = defaultdict(list)
-        for fi in scan_directory(self._root, self._exts):
-            if self._cancelled:
-                break
-            by_dir[fi.directory].append(fi)
-        self.folders_found.emit(len(by_dir))
+        by_dir = self._groups
 
         # Un dossier par tâche : les encodages d'un même dossier restent
         # séquentiels, les dossiers avancent en parallèle
         with ThreadPoolExecutor(max_workers=self._parallel) as pool:
             futures = {
-                pool.submit(estimate_files, files, *self._opts, None,
-                            lambda: self._cancelled, 32): d
+                pool.submit(self._estimate_folder, d, files): d
                 for d, files in sorted(by_dir.items())
             }
             for fut in as_completed(futures):
@@ -334,5 +390,7 @@ class FolderAnalysisThread(QThread):
                     get_app_logger().warning("Estimation impossible pour %s : %r", futures[fut], e)
                     est = None
                 if est is not None:
-                    self.folder_done.emit(futures[fut], est)
+                    self.group_done.emit(futures[fut], est)
+        with self._lock:
+            self._phase = "done"
         self.all_done.emit()
