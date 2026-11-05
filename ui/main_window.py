@@ -1,9 +1,10 @@
 import json
+import math
 import os
 from datetime import datetime
 from typing import List, Optional
 
-from PyQt6.QtCore    import Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore    import Qt, QSize, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QFileDialog, QCheckBox,
@@ -12,7 +13,8 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog, QScrollArea, QMenu, QSlider, QStackedWidget,
     QButtonGroup,
 )
-from PyQt6.QtGui import QFont, QCursor
+from PyQt6.QtGui import (QFont, QCursor, QIcon, QPixmap, QPainter, QPen, QColor,
+                         QPolygonF)
 
 from core.config    import (APP_TITLE, SUPPORTED_INPUT_FORMATS, OUTPUT_FORMATS,
                              IMAGE_INPUT_FORMATS, IMAGE_OUTPUT_FORMATS,
@@ -173,6 +175,30 @@ class _ConflictDialog(QDialog):
     def showEvent(self, e):
         super().showEvent(e)
         apply_acrylic(int(self.winId()), dark=True)
+
+
+# ── Icône « actualiser » (flèche circulaire dessinée, nette à toute taille) ──
+
+def _refresh_icon(color: str = "#d8ccff") -> QIcon:
+    size = 44                                   # dessinée en 2× puis réduite
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 4.2, cap=Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    r = QRectF(8, 8, size - 16, size - 16)
+    p.drawArc(r, 60 * 16, 290 * 16)             # cercle ouvert en haut à droite
+    # Pointe de flèche au bout de l'arc (vers 60°)
+    c = r.center()
+    rad = r.width() / 2
+    tip = QPointF(c.x() + rad * math.cos(math.radians(60)),
+                  c.y() - rad * math.sin(math.radians(60)))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    p.drawPolygon(QPolygonF([tip + QPointF(-9, -5), tip + QPointF(6, -9), tip + QPointF(3, 7)]))
+    p.end()
+    return QIcon(pix)
 
 
 # ── Windows Recycle Bin helper (no extra dependency) ─────────────────────────
@@ -467,10 +493,20 @@ class MainWindow(QMainWindow):
         self._btn_analyze.clicked.connect(self._toggle_estimate)
         fmt_row.addWidget(self._btn_analyze)
 
-        btn_scan = QPushButton("  Afficher les fichiers  ")
-        btn_scan.setObjectName("btn_primary")
-        btn_scan.clicked.connect(self._scan_directory)
-        fmt_row.addWidget(btn_scan)
+        # Les fichiers s'affichent dès qu'un dossier est choisi ; ce bouton
+        # relit le dossier (formats cochés modifiés, fichiers ajoutés…)
+        btn_refresh = QPushButton()
+        btn_refresh.setObjectName("btn_refresh")
+        btn_refresh.setFixedSize(44, 38)
+        btn_refresh.setIcon(_refresh_icon())
+        btn_refresh.setIconSize(QSize(22, 22))
+        btn_refresh.setToolTip(
+            "Actualiser la liste\n"
+            "Relit le dossier : à utiliser après avoir changé les formats cochés,\n"
+            "ou si des fichiers ont été ajoutés, renommés ou supprimés entre-temps."
+        )
+        btn_refresh.clicked.connect(self._scan_directory)
+        fmt_row.addWidget(btn_refresh)
 
         lay.addLayout(fmt_row)
         return panel
@@ -700,6 +736,7 @@ class MainWindow(QMainWindow):
             self._dir_edit.setText(path)
             self._settings["last_directory"] = path
             self._save_settings()
+            self._scan_directory()
             self._suggest_estimate(path)
 
     @property

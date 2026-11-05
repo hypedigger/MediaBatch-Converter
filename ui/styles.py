@@ -646,6 +646,17 @@ QPushButton#btn_accent:hover {
 }
 QPushButton#btn_accent:pressed { background: rgba(20, 140, 120, 255); }
 
+/* Bouton « Actualiser la liste » (⟳) */
+QPushButton#btn_refresh {
+    background: rgba(255, 255, 255, 8);
+    border: 1px solid rgba(255, 255, 255, 18);
+    border-radius: 8px;
+    color: rgba(220, 210, 255, 220);
+    padding: 0;
+}
+QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 120); color: white; }
+QPushButton#btn_refresh:pressed { background: rgba(110, 88, 220, 180); }
+
 /* Petits boutons Tous / Aucun collés aux cases de formats */
 QPushButton#btn_chip {
     background: rgba(255, 255, 255, 6);
@@ -714,6 +725,15 @@ QPushButton#btn_accent {
     font-weight: 600;
 }
 QPushButton#btn_accent:hover { background: rgba(16, 165, 135, 255); }
+
+QPushButton#btn_refresh {
+    background: rgba(0, 0, 0, 4);
+    border: 1px solid rgba(0, 0, 0, 16);
+    border-radius: 8px;
+    color: rgba(60, 40, 140, 220);
+    padding: 0;
+}
+QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 60); }
 
 QPushButton#btn_chip {
     background: rgba(0, 0, 0, 4);
