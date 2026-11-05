@@ -42,6 +42,10 @@ TARGET_MARGIN   = 0.08      # marge visée (±8 %) avant d'arrêter l'échantill
 # Le modèle n'est pas parfait : marge statistique × 1.5, et jamais sous ±5 %
 MARGIN_SAFETY   = 1.5
 MARGIN_FLOOR    = 0.05
+PRIOR_WEIGHT    = 8         # poids (en essais) de la tendance commune
+GROUP_INITIAL   = 4         # essais initiaux par dossier quand une tendance commune existe
+PRIOR_FILES     = 600       # images (réparties) servant à apprendre la tendance commune
+PRIOR_SAMPLES   = 24        # conversions d'essai pour cette tendance
 HEADER_CAP      = 300       # au-delà, en-têtes lus d'abord sur un échantillon
 HEADER_TARGET   = 0.03      # erreur d'extrapolation tolérée avant de lire plus d'en-têtes
 # Extrapolation réservée aux dossiers homogènes (photos d'un même appareil :
@@ -73,6 +77,10 @@ class Estimate:
     # None = extrapolé d'après la taille (en-tête non lu, gros dossier)
     per_file:  Optional[List[Tuple[int, Optional[bool]]]] = None
     headers_read: int = 0
+    # Prédiction du modèle pour chaque fichier, même mesuré (calage par dossier)
+    model:     Optional[List[float]] = None
+    # Pente ajustée par famille (jpeg, png…) : tendance réutilisable ailleurs
+    slopes:    Optional[Dict[str, float]] = None
 
     @property
     def exact(self) -> bool:
@@ -140,10 +148,13 @@ def _systematic(items: List[int], key: Callable[[int], float], k: int) -> List[i
 class _Stratum:
     """Groupe de fichiers homogène (JPEG / autres) avec son propre modèle."""
 
-    def __init__(self, idx: List[int], base: List[float], x: List[float]):
+    def __init__(self, idx: List[int], base: List[float], x: List[float],
+                 prior_b: Optional[float] = None):
         self.idx     = idx
         self.base    = base
         self.x       = x
+        self.prior_b = prior_b                 # pente apprise ailleurs (même famille)
+        self.b       = 0.0
         self.sampled: Dict[int, int] = {}      # index → octets produits
 
     def pick(self, k: int) -> List[int]:
@@ -156,12 +167,18 @@ class _Stratum:
         ys = [math.log(max(self.sampled[i], 1) / self.base[i]) for i in s]
         xs = [self.x[i] for i in s]
         mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
-        b = 0.0
+        b, n_local = 0.0, 0
         if len(s) >= 4:
             vx = sum((v - mx) ** 2 for v in xs)
             if vx > 1e-9:
                 b = sum((u - mx) * (v - my) for u, v in zip(xs, ys)) / vx
                 b = max(-3.0, min(3.0, b))
+                n_local = len(s)
+        if self.prior_b is not None:
+            # Peu d'essais ici : la tendance apprise sur l'ensemble prime,
+            # puis s'efface à mesure que les essais locaux s'accumulent
+            b = (n_local * b + PRIOR_WEIGHT * self.prior_b) / (n_local + PRIOR_WEIGHT)
+        self.b = b
         raw = lambda i: self.base[i] * math.exp(my + b * (self.x[i] - mx))
         # Calage : la somme prédite sur l'échantillon = la somme réelle
         c = sum(self.sampled.values()) / max(sum(raw(i) for i in s), 1e-9)
@@ -228,6 +245,8 @@ def estimate_files(
     max_samples:    int = MAX_SAMPLES,
     on_progress:    Optional[Callable[[str, int], None]] = None,
     header_cap:     Optional[int] = HEADER_CAP,
+    prior:          Optional[Dict[str, float]] = None,
+    initial:        int = INITIAL_SAMPLES,
 ) -> Optional[Estimate]:
     """
     Estimation du poids total après conversion. None si annulé ou vide.
@@ -238,7 +257,7 @@ def estimate_files(
     """
     tick = on_progress or (lambda _kind, _n=1: None)
     args = (out_fmt, quality, max_side, keep_if_larger, executor, cancelled,
-            max_samples, tick)
+            max_samples, tick, prior, initial)
     n_all = len(files)
     if not header_cap or n_all <= header_cap:
         tick("plan", sum(not _header_cached(f) for f in files))
@@ -331,6 +350,8 @@ def _estimate_all(
     cancelled:      Callable[[], bool],
     max_samples:    int,
     tick:           Callable[..., None],
+    prior:          Optional[Dict[str, float]] = None,
+    initial:        int = INITIAL_SAMPLES,
 ) -> Optional[Estimate]:
     """Estimation en lisant l'en-tête de chaque fichier de *files*."""
     if not files:
@@ -376,7 +397,8 @@ def _estimate_all(
         return Estimate(len(files), sum(src), sum(src), 0, 0.0,
                         [(n, False) for n in src])
 
-    strata = [_Stratum(g, base, x) for g in groups.values()]
+    prior = prior or {}
+    strata = [_Stratum(g, base, x, prior.get(fam)) for fam, g in groups.items()]
     budget = min(max_samples, readable)
 
     def sample(stratum_picks: List[Tuple[_Stratum, List[int]]]):
@@ -393,7 +415,7 @@ def _estimate_all(
             st.sampled[i] = n
 
     # Premier tour : répartition proportionnelle, au moins 3 par groupe
-    k0 = min(INITIAL_SAMPLES, budget)
+    k0 = min(initial, budget)
     sample([(st, st.pick(max(min(3, len(st.idx)), round(k0 * len(st.idx) / readable))))
             for st in strata])
 
@@ -415,14 +437,17 @@ def _estimate_all(
         if not open_k:
             break
         st = strata[max(open_k, key=lambda k: totals[k][1])]
-        sample([(st, st.pick(min(SAMPLE_STEP, budget - n_done)))])
+        sample([(st, st.pick(min(SAMPLE_STEP if initial >= INITIAL_SAMPLES else initial,
+                                 budget - n_done)))])
 
     # Détail par image (illisibles : comptées inchangées)
     per_file: List[Tuple[int, bool]] = [(n, False) for n in src]
+    model: List[float] = [float(n) for n in src]
     for st in strata:
         pred = st.fit()
         for i in st.idx:
             measured = i in st.sampled
+            model[i] = min(pred(i), src[i]) if keep_if_larger else pred(i)
             v = st.sampled[i] if measured else pred(i)
             if keep_if_larger:
                 v = min(v, src[i])
@@ -436,6 +461,8 @@ def _estimate_all(
         margin    = margin,
         per_file  = per_file,
         headers_read = len(files),
+        model     = model,
+        slopes    = {fam: st.b for fam, st in zip(groups, strata)},
     )
 
 
@@ -504,24 +531,55 @@ class GroupEstimateThread(QThread):
             else:
                 self._samples += n
 
-    def _estimate_folder(self, directory: str, files: List[FileInfo]):
+    def _estimate_folder(self, directory: str, files: List[FileInfo], prior):
         with self._lock:
             self._current[directory] = len(files)
         try:
             return estimate_files(files, *self._opts, None, lambda: self._cancelled,
-                                  32, self._on_progress)
+                                  32, self._on_progress, prior=prior,
+                                  initial=GROUP_INITIAL if prior else INITIAL_SAMPLES)
         finally:
             with self._lock:
                 self._current.pop(directory, None)
 
+    def _learn_prior(self) -> Optional[Dict[str, float]]:
+        """
+        Tendance commune (comment le taux de compression varie avec la qualité
+        d'origine), apprise sur des images réparties dans tous les dossiers :
+        chaque dossier n'a ensuite besoin que de quelques essais pour se caler.
+        """
+        allf = [f for g in self._groups.values() for f in g]
+        if len(self._groups) < 2 or len(allf) < 2 * PRIOR_SAMPLES:
+            return None
+        by_size = sorted(range(len(allf)), key=lambda i: (_family(allf[i]), allf[i].size))
+        sub = [allf[by_size[p]] for p in _spread_order(len(allf))[:PRIOR_FILES]]
+        with self._lock:
+            self._current["tendance commune"] = len(sub)
+        try:
+            with ThreadPoolExecutor(max_workers=self._parallel) as ex:
+                est = estimate_files(sub, *self._opts, ex, lambda: self._cancelled,
+                                     PRIOR_SAMPLES, self._on_progress, header_cap=None,
+                                     initial=PRIOR_SAMPLES)
+            return est.slopes if est else None
+        except Exception as e:
+            get_app_logger().warning("Tendance commune impossible : %r", e)
+            return None
+        finally:
+            with self._lock:
+                self._current.pop("tendance commune", None)
+
     def run(self):
         by_dir = self._groups
+        prior = self._learn_prior()
+        if self._cancelled:
+            self.all_done.emit()
+            return
 
         # Un dossier par tâche : les encodages d'un même dossier restent
         # séquentiels, les dossiers avancent en parallèle
         with ThreadPoolExecutor(max_workers=self._parallel) as pool:
             futures = {
-                pool.submit(self._estimate_folder, d, files): d
+                pool.submit(self._estimate_folder, d, files, prior): d
                 for d, files in sorted(by_dir.items())
             }
             for fut in as_completed(futures):
