@@ -32,7 +32,7 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 
 Nothing is written to disk. The app reads the header of every image (dimensions and, for JPEGs, the quantization tables — i.e. the quality the file was originally saved at), converts a small sample in memory, fits a model of *compression ratio vs. original quality*, and extrapolates to every file. More samples are added until the margin is tight enough. On real photo folders the estimate lands within a few percent of the actual result; the displayed margin (`± x %`) is deliberately conservative.
 
-On a USB hard drive, analysing ~11,000 photos across 200 folders takes about 5 minutes (header reads dominate); it is much faster on an SSD, and results appear folder by folder.
+On a hard drive, reading every header costs one disk seek per file. For folders of more than 300 images, the app first reads 300 headers spread across the folder: if the folder is homogeneous (camera photos: a handful of JPEG quality levels), the rest is extrapolated from file sizes — reading more headers if needed — and only those images are marked as extrapolated. Heterogeneous folders (downloaded images with dozens of quality levels) are still read in full, to keep the estimate accurate. Results appear folder by folder.
 
 ## Features (Audio mode)
 

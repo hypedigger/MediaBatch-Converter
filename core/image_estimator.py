@@ -11,6 +11,12 @@ Principe (calibré sur des dossiers réels) :
      Un JPEG déjà très compressé ne gagne presque rien, un JPEG « qualité
      maximale » fond : ce critère explique ~90 % de l'écart entre fichiers.
   4. Tant que la marge d'erreur reste large, on ajoute des échantillons.
+
+Gros dossiers (> HEADER_CAP images) : lire chaque en-tête coûte un accès
+disque (~10–50 ms sur un disque dur externe). On ne lit alors que HEADER_CAP
+en-têtes, choisis régulièrement par type et par taille, on estime ce
+sous-ensemble comme ci-dessus, puis on extrapole aux autres fichiers selon
+leur taille ; la marge tient compte de cet échantillonnage supplémentaire.
 """
 
 import math
@@ -36,6 +42,12 @@ TARGET_MARGIN   = 0.08      # marge visée (±8 %) avant d'arrêter l'échantill
 # Le modèle n'est pas parfait : marge statistique × 1.5, et jamais sous ±5 %
 MARGIN_SAFETY   = 1.5
 MARGIN_FLOOR    = 0.05
+HEADER_CAP      = 300       # au-delà, en-têtes lus d'abord sur un échantillon
+HEADER_TARGET   = 0.03      # erreur d'extrapolation tolérée avant de lire plus d'en-têtes
+# Extrapolation réservée aux dossiers homogènes (photos d'un même appareil :
+# 1 à 12 niveaux de qualité JPEG ; images téléchargées : 30 à 60)
+HOMOGENEOUS_MAX_LEVELS = 8
+HOMOGENEOUS_MIN_JPEG   = 0.95
 
 _lock         = threading.Lock()
 _header_cache: Dict[Tuple[str, float, int], Optional["_Header"]] = {}
@@ -56,9 +68,11 @@ class Estimate:
     est_bytes: int
     n_samples: int
     margin:    float          # demi-largeur relative d'un intervalle à ~90 %
-    # Par fichier, dans l'ordre de la liste fournie : (octets estimés, mesuré ?)
-    # « mesuré » = l'image fait partie des conversions d'essai
-    per_file:  Optional[List[Tuple[int, bool]]] = None
+    # Par fichier, dans l'ordre de la liste fournie : (octets estimés, mesuré)
+    # mesuré : True = conversion d'essai, False = prédit d'après l'en-tête,
+    # None = extrapolé d'après la taille (en-tête non lu, gros dossier)
+    per_file:  Optional[List[Tuple[int, Optional[bool]]]] = None
+    headers_read: int = 0
 
     @property
     def exact(self) -> bool:
@@ -177,6 +191,32 @@ class _Stratum:
         return est, (rest ** 2) * var_r / n * (1 - n / N)
 
 
+def _family(fi: FileInfo) -> str:
+    return "jpeg" if fi.extension in ("jpg", "jpeg", "jfif") else fi.extension
+
+
+def _header_cached(fi: FileInfo) -> bool:
+    with _lock:
+        return (fi.path, fi.date_created, fi.size) in _header_cache
+
+
+def _spread_order(n: int) -> List[int]:
+    """
+    Permutation de 0..n-1 dont chaque préfixe est réparti uniformément
+    (suite de van der Corput) : lire les k premiers = un échantillon régulier,
+    et en lire plus ne fait que le compléter.
+    """
+    m = max(1, (n - 1).bit_length())
+    seen, out = set(), []
+    for k in range(1 << m):
+        rev = int(format(k, f"0{m}b")[::-1], 2)
+        pos = rev * n >> m
+        if pos not in seen:
+            seen.add(pos)
+            out.append(pos)
+    return out
+
+
 def estimate_files(
     files:          List[FileInfo],
     out_fmt:        Dict[str, Any],
@@ -186,24 +226,125 @@ def estimate_files(
     executor=None,
     cancelled:      Callable[[], bool] = lambda: False,
     max_samples:    int = MAX_SAMPLES,
-    on_progress:    Optional[Callable[[str], None]] = None,
+    on_progress:    Optional[Callable[[str, int], None]] = None,
+    header_cap:     Optional[int] = HEADER_CAP,
 ) -> Optional[Estimate]:
     """
     Estimation du poids total après conversion. None si annulé ou vide.
-    *on_progress("header" | "sample")* est appelé à chaque en-tête lu et à
-    chaque conversion d'essai (affichage de l'activité).
+    *on_progress(kind, n)* : "plan" = n en-têtes de plus à lire, "header" =
+    un en-tête lu, "sample" = une conversion d'essai (affichage de l'activité).
+    *header_cap* : en-têtes lus d'abord sur un échantillon de cette taille,
+    complété tant que le dossier s'avère hétérogène (None = tous).
     """
+    tick = on_progress or (lambda _kind, _n=1: None)
+    args = (out_fmt, quality, max_side, keep_if_larger, executor, cancelled,
+            max_samples, tick)
+    n_all = len(files)
+    if not header_cap or n_all <= header_cap:
+        tick("plan", sum(not _header_cached(f) for f in files))
+        return _estimate_all(files, *args)
+
+    # Ordre de lecture : fichiers triés par (type, taille), parcourus de façon
+    # à ce que chaque tranche couvre tout l'éventail des tailles et des types
+    by_size = sorted(range(n_all), key=lambda i: (_family(files[i]), files[i].size))
+    order = [by_size[p] for p in _spread_order(n_all)]
+
+    planned = 0
+    h = header_cap
+
+    # Premier lot d'en-têtes : le dossier est-il assez homogène pour extrapoler ?
+    first = [files[i] for i in order[:h]]
+    planned = sum(not _header_cached(f) for f in first)
+    tick("plan", planned)
+    hdrs = [_header(f) for f in first] if not executor else list(executor.map(_header, first))
+    tick("header", planned)
+    if cancelled():
+        return None
+    q_levels = {round(math.log(x.q_avg), 3) for x in hdrs if x and x.q_avg}
+    jpeg_share = sum(1 for x in hdrs if x and x.q_avg) / len(first)
+    if len(q_levels) > HOMOGENEOUS_MAX_LEVELS or jpeg_share < HOMOGENEOUS_MIN_JPEG:
+        tick("plan", n_all - h)
+        return _estimate_all(files, *args)
+
+    while True:
+        sub_idx = order[:h]
+        sub = [files[i] for i in sub_idx]
+        new = sum(not _header_cached(f) for f in sub) - planned
+        if new > 0:
+            tick("plan", new)
+            planned += new
+        if h >= n_all:
+            # Dossier trop hétérogène pour extrapoler : tout est lu
+            return _estimate_all(files, *args)
+        est = _estimate_all(sub, *args)
+        if est is None:
+            return None
+
+        # Erreur due à l'échantillonnage des en-têtes (estimateur par ratio)
+        ratios = [v / fi.size for fi, (v, _m) in zip(sub, est.per_file) if fi.size]
+        se = 0.0
+        if len(ratios) > 1:
+            mean = sum(ratios) / len(ratios)
+            sd = math.sqrt(sum((r - mean) ** 2 for r in ratios) / (len(ratios) - 1))
+            if mean > 0:
+                se = sd / mean / math.sqrt(len(ratios)) * math.sqrt(1 - h / n_all)
+        header_err = MARGIN_SAFETY * 1.645 * se
+        if header_err <= HEADER_TARGET:
+            break
+        h = min(n_all, h * 2)           # hétérogène : on lit plus d'en-têtes
+
+    # Taux de compression par type, mesuré sur le sous-ensemble
+    fam_src: Dict[str, float] = defaultdict(float)
+    fam_est: Dict[str, float] = defaultdict(float)
+    for fi, (v, _m) in zip(sub, est.per_file):
+        fam_src[_family(fi)] += fi.size
+        fam_est[_family(fi)] += v
+    overall = est.est_bytes / est.src_bytes if est.src_bytes else 1.0
+
+    per_file: List[Optional[Tuple[int, Optional[bool]]]] = [None] * n_all
+    for i, pf in zip(sub_idx, est.per_file):
+        per_file[i] = pf
+    for i, fi in enumerate(files):
+        if per_file[i] is None:
+            f = _family(fi)
+            r = fam_est[f] / fam_src[f] if fam_src[f] else overall
+            per_file[i] = (int(fi.size * r), None)
+
+    return Estimate(
+        n_files   = n_all,
+        src_bytes = sum(f.size for f in files),
+        est_bytes = int(sum(v for v, _m in per_file)),
+        n_samples = est.n_samples,
+        margin    = max(MARGIN_FLOOR, math.sqrt(est.margin ** 2 + header_err ** 2)),
+        per_file  = per_file,
+        headers_read = len(sub),
+    )
+
+
+def _estimate_all(
+    files:          List[FileInfo],
+    out_fmt:        Dict[str, Any],
+    quality:        int,
+    max_side:       int,
+    keep_if_larger: bool,
+    executor,
+    cancelled:      Callable[[], bool],
+    max_samples:    int,
+    tick:           Callable[..., None],
+) -> Optional[Estimate]:
+    """Estimation en lisant l'en-tête de chaque fichier de *files*."""
     if not files:
         return None
-    tick = on_progress or (lambda _kind: None)
     run = (lambda fn, items: list(executor.map(fn, items))) if executor \
         else (lambda fn, items: [fn(it) for it in items])
 
     def read_header(fi):
         if cancelled():
             return None
+        cached = _header_cached(fi)
         h = _header(fi)
-        tick("header")
+        if not cached:
+            tick("header")
         return h
 
     headers = run(read_header, files)
@@ -294,6 +435,7 @@ def estimate_files(
         n_samples = n_done,
         margin    = margin,
         per_file  = per_file,
+        headers_read = len(files),
     )
 
 
@@ -340,7 +482,7 @@ class GroupEstimateThread(QThread):
         # Activité, lue par l'interface via snapshot() (simples compteurs)
         self._lock      = threading.Lock()
         self._phase     = "estimate"        # "estimate" → "done"
-        self._total     = sum(len(v) for v in groups.values())
+        self._total     = 0                 # en-têtes à lire (annoncés au fil de l'eau)
         self._headers   = 0                 # en-têtes lus
         self._samples   = 0                 # conversions d'essai faites
         self._current: Dict[str, int] = {}  # dossiers en cours → nb d'images
@@ -353,12 +495,14 @@ class GroupEstimateThread(QThread):
             return dict(phase=self._phase, total=self._total, headers=self._headers,
                         samples=self._samples, current=list(self._current))
 
-    def _on_progress(self, kind: str):
+    def _on_progress(self, kind: str, n: int = 1):
         with self._lock:
-            if kind == "header":
-                self._headers += 1
+            if kind == "plan":
+                self._total += n
+            elif kind == "header":
+                self._headers += n
             else:
-                self._samples += 1
+                self._samples += n
 
     def _estimate_folder(self, directory: str, files: List[FileInfo]):
         with self._lock:

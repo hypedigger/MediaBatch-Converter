@@ -414,13 +414,18 @@ class ImageTreePanel(QWidget):
             self._fill(folder, est.src_bytes, est.est_bytes)
             folder.set(C_MARGIN, "exacte" if est.exact else f"± {est.margin * 100:.0f} %",
                        0 if est.exact else est.margin, _RIGHT)
-            folder.setToolTip(C_MARGIN, f"{est.n_samples} image(s) convertie(s) en test "
-                                        f"sur {est.n_files}, en mémoire")
+            tip = f"{est.n_samples} image(s) convertie(s) en test sur {est.n_files}, en mémoire"
+            if est.headers_read < est.n_files:
+                tip += (f"\nDossier volumineux et homogène : en-têtes lus sur "
+                        f"{est.headers_read} images, le reste extrapolé d'après la taille")
+            folder.setToolTip(C_MARGIN, tip)
         for (fi, it), (est_b, measured) in zip(items, est.per_file or []):
             self._fill(it, fi.size, est_b)
             it.set(C_MARGIN, "mesurée" if measured else "", 0 if measured else 1, _RIGHT)
             it.setToolTip(C_EST, "Mesurée par une conversion d'essai" if measured
-                          else "Prédite d'après la qualité et la taille du fichier")
+                          else "Prédite d'après la qualité et la taille du fichier"
+                          if measured is False
+                          else "Extrapolée d'après la taille (dossier volumineux)")
         tree.setSortingEnabled(True)
 
     @staticmethod
