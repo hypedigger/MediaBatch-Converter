@@ -4,10 +4,12 @@ Masquée par défaut ; apparaît quand l'utilisateur pré-écoute un fichier.
 """
 import os
 
-from PyQt6.QtCore    import Qt, QUrl, pyqtSignal
+from PyQt6.QtCore    import Qt, QUrl, QSize, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
 )
+
+from ui.icons import icon, PALETTE
 
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
@@ -52,7 +54,9 @@ class PreviewPlayer(QWidget):
         lay.setContentsMargins(16, 8, 12, 8)
         lay.setSpacing(12)
 
-        self._btn_play = QPushButton("⏸")
+        self._btn_play = QPushButton()
+        self._btn_play.setIconSize(QSize(16, 16))
+        self._set_play_icon(True)
         self._btn_play.setObjectName("btn_icon")
         self._btn_play.setFixedSize(34, 30)
         self._btn_play.clicked.connect(self._toggle_play)
@@ -95,7 +99,9 @@ class PreviewPlayer(QWidget):
         self._vol.valueChanged.connect(self._set_volume)
         lay.addWidget(self._vol)
 
-        btn_close = QPushButton("✕")
+        btn_close = QPushButton()
+        btn_close.setIcon(icon("close", PALETTE["dark"]["muted"], 15))
+        btn_close.setIconSize(QSize(15, 15))
         btn_close.setObjectName("btn_icon")
         btn_close.setFixedSize(30, 30)
         btn_close.clicked.connect(self.stop_and_hide)
@@ -125,7 +131,7 @@ class PreviewPlayer(QWidget):
         self._lbl_title.setText(os.path.basename(path))
         self._player.setSource(QUrl.fromLocalFile(path))
         self._player.play()
-        self._btn_play.setText("⏸")
+        self._set_play_icon(True)
         self.show()
         return True
 
@@ -134,7 +140,7 @@ class PreviewPlayer(QWidget):
         if self._player:
             self._player.stop()
             self._player.setSource(QUrl())   # release file handle
-        self._btn_play.setText("▶")
+        self._set_play_icon(False)
         self.stopped.emit()
 
     def stop_and_hide(self):
@@ -165,15 +171,20 @@ class PreviewPlayer(QWidget):
 
     # ── Private ───────────────────────────────────────────────────────────────
 
+    def _set_play_icon(self, playing: bool):
+        """Bouton lecture : pause pendant la lecture, play sinon."""
+        self._btn_play.setIcon(icon("pause" if playing else "play",
+                                    PALETTE["dark"]["text"], 16))
+
     def _toggle_play(self):
         if not self._player:
             return
         if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self._player.pause()
-            self._btn_play.setText("▶")
+            self._set_play_icon(False)
         else:
             self._player.play()
-            self._btn_play.setText("⏸")
+            self._set_play_icon(True)
 
     def _on_slider_released(self):
         if self._player:
@@ -200,4 +211,4 @@ class PreviewPlayer(QWidget):
 
     def _on_error(self, _error, error_string: str):
         self._lbl_title.setText(f"⚠ Lecture impossible — {error_string}")
-        self._btn_play.setText("▶")
+        self._set_play_icon(False)

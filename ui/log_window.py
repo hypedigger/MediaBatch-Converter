@@ -1,6 +1,6 @@
 import os
 
-from PyQt6.QtCore    import Qt, pyqtSignal
+from PyQt6.QtCore    import Qt, QSize, pyqtSignal
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                               QLabel, QPushButton, QTextEdit, QTabWidget)
 from PyQt6.QtGui     import QFont, QColor, QTextCharFormat, QTextCursor
@@ -9,6 +9,7 @@ from core.config import LOGS_DIR
 from core.logger import (set_app_log_callback, set_export_log_callback,
                           get_app_log_buffer, get_export_log_buffer)
 from ui.effects  import apply_acrylic
+from ui.icons    import icon, PALETTE
 
 
 _LEVEL_COLORS = {
@@ -64,7 +65,7 @@ class LogWindow(QWidget):
         tb_lay = QHBoxLayout(title_bar)
         tb_lay.setContentsMargins(16, 0, 8, 0)
 
-        lbl = QLabel("📋  Journaux")
+        lbl = QLabel("Journaux")
         lbl.setObjectName("title_label")
         tb_lay.addWidget(lbl)
         tb_lay.addStretch()
@@ -75,8 +76,10 @@ class LogWindow(QWidget):
         btn_clear.clicked.connect(self._clear_current_tab)
         tb_lay.addWidget(btn_clear)
 
-        btn_open_dir = QPushButton("📂 Ouvrir dossier")
+        btn_open_dir = QPushButton(" Ouvrir le dossier")
         btn_open_dir.setObjectName("btn_icon")
+        btn_open_dir.setIcon(icon("folder", PALETTE.get(self._theme, PALETTE["dark"])["muted"], 16))
+        btn_open_dir.setIconSize(QSize(16, 16))
         btn_open_dir.setFixedHeight(28)
         btn_open_dir.clicked.connect(self._open_log_dir)
         tb_lay.addWidget(btn_open_dir)

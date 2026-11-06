@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWid
 from core.image_estimator import Estimate, GroupEstimateThread
 from core.scanner         import FileInfo
 from ui.table_style       import style_table, ACCENT_ROLE
+from ui.icons             import icon, PALETTE
 
 
 # ── Formatage ────────────────────────────────────────────────────────────────
@@ -173,6 +174,7 @@ class ImageTreePanel(QWidget):
 
     def __init__(self, theme: str = "dark", parent=None):
         super().__init__(parent)
+        self._theme = theme
         self._root  = ""
         # clé de groupe (dossier) → (ligne du dossier ou None, [(FileInfo, ligne)])
         self._groups: Dict[str, Tuple[Optional[_Item], List[Tuple[FileInfo, _Item]]]] = {}
@@ -191,7 +193,7 @@ class ImageTreePanel(QWidget):
         self._spinner = _Spinner()
         act.addWidget(self._spinner)
         self._lbl_activity = QLabel()
-        self._lbl_activity.setStyleSheet("color: rgba(200, 235, 230, 210); font-size: 12px;")
+        self._lbl_activity.setObjectName("label_activity")
         act.addWidget(self._lbl_activity, 1)
         self._legend = QLabel("&nbsp;&nbsp;".join(
             f'<span style="color:{c}">●</span> {"&lt; 15" if t < 0 else f"≥ {t}"} %'
@@ -262,7 +264,8 @@ class ImageTreePanel(QWidget):
             if not loose:
                 folder = _Item()
                 rel = os.path.relpath(directory, self._root) if self._root else directory
-                folder.set(C_NAME, "📁  " + (rel if not rel.startswith("..") else directory))
+                folder.set(C_NAME, rel if not rel.startswith("..") else directory)
+                folder.setIcon(C_NAME, self._folder_icon())
                 folder.setToolTip(C_NAME, directory)
                 folder.setData(C_NAME, Qt.ItemDataRole.UserRole, ("dir", directory))
                 folder.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
@@ -496,11 +499,12 @@ class ImageTreePanel(QWidget):
             return
         data = item.data(C_NAME, Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
+        mc = PALETTE.get(self._theme, PALETTE["dark"])["text"]
         if isinstance(data, tuple):                     # dossier
             directory = data[1]
-            act_open = menu.addAction("📂  Ouvrir dans l'Explorateur")
-            act_exp = menu.addAction("Tout déplier")
-            act_col = menu.addAction("Tout replier")
+            act_open = menu.addAction(icon("folder", mc, 16), "Ouvrir dans l'Explorateur")
+            act_exp = menu.addAction(icon("expand", mc, 16), "Tout déplier")
+            act_col = menu.addAction(icon("collapse", mc, 16), "Tout replier")
             action = menu.exec(self._tree.viewport().mapToGlobal(pos))
             if action == act_open:
                 subprocess.Popen(["explorer", os.path.normpath(directory)])
@@ -509,8 +513,8 @@ class ImageTreePanel(QWidget):
             elif action == act_col:
                 self._tree.collapseAll()
         elif isinstance(data, FileInfo):
-            act_file = menu.addAction("🖼  Ouvrir l'image")
-            act_dir = menu.addAction("📂  Afficher dans l'Explorateur")
+            act_file = menu.addAction(icon("image", mc, 16), "Ouvrir l'image")
+            act_dir = menu.addAction(icon("folder", mc, 16), "Afficher dans l'Explorateur")
             action = menu.exec(self._tree.viewport().mapToGlobal(pos))
             if action == act_file:
                 try:
@@ -522,8 +526,15 @@ class ImageTreePanel(QWidget):
 
     # ── Thème ─────────────────────────────────────────────────────────────────
 
+    def _folder_icon(self):
+        return icon("folder", PALETTE.get(self._theme, PALETTE["dark"])["muted"], 16)
+
     def apply_theme(self, theme: str):
+        self._theme = theme
         style_table(self._tree, theme)
+        for folder, _items in self._groups.values():
+            if folder is not None:
+                folder.setIcon(C_NAME, self._folder_icon())
 
     @property
     def tree(self) -> QTreeWidget:

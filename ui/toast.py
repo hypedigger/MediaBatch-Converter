@@ -1,7 +1,8 @@
 import time
 from typing import Callable, Optional
 
-from PyQt6.QtCore    import Qt, QTimer, QPropertyAnimation, QEasingCurve, QEvent
+from PyQt6.QtCore    import Qt, QTimer, QPropertyAnimation, QEasingCurve, QEvent, QSize
+from ui.icons import icon, PALETTE
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
                               QGraphicsOpacityEffect, QProgressBar, QWidget)
 
@@ -37,8 +38,10 @@ class Toast(QFrame):
         self._btn.clicked.connect(self._on_action)
         row.addWidget(self._btn)
 
-        btn_close = QPushButton("✕")
+        btn_close = QPushButton()
         btn_close.setObjectName("btn_icon")
+        btn_close.setIcon(icon("close", PALETTE["dark"]["muted"], 15))
+        btn_close.setIconSize(QSize(15, 15))
         btn_close.setFixedSize(28, 28)
         btn_close.setToolTip("Ignorer")
         btn_close.clicked.connect(self.dismiss)
@@ -68,9 +71,13 @@ class Toast(QFrame):
 
     # ── API ───────────────────────────────────────────────────────────────────
 
-    def show_message(self, text: str, action_text: str, action: Callable[[], None]):
+    def show_message(self, text: str, action_text: str, action: Callable[[], None],
+                     action_icon: Optional[str] = None):
         self._lbl.setText(text)
         self._btn.setText(action_text)
+        if action_icon:
+            self._btn.setIcon(icon(action_icon, PALETTE["dark"]["on_accent"], 17))
+            self._btn.setIconSize(QSize(17, 17))
         self._action = action
         self._remaining = self._timeout
         self._bar.setValue(self._timeout)

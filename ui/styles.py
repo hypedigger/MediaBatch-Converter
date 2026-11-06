@@ -657,6 +657,9 @@ QPushButton#btn_refresh {
 QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 120); color: white; }
 QPushButton#btn_refresh:pressed { background: rgba(110, 88, 220, 180); }
 
+QLabel#label_field    { color: rgba(255, 255, 255, 160); font-size: 13px; }
+QLabel#label_activity { color: rgba(200, 235, 230, 210); font-size: 12px; }
+
 /* Petits boutons Tous / Aucun collés aux cases de formats */
 QPushButton#btn_chip {
     background: rgba(255, 255, 255, 6);
@@ -734,6 +737,9 @@ QPushButton#btn_refresh {
     padding: 0;
 }
 QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 60); }
+
+QLabel#label_field    { color: rgba(30, 20, 60, 170); font-size: 13px; }
+QLabel#label_activity { color: rgba(10, 100, 85, 230); font-size: 12px; }
 
 QPushButton#btn_chip {
     background: rgba(0, 0, 0, 4);

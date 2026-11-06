@@ -94,6 +94,10 @@ If this tool saves you time, you can support its development on [Ko-fi](https://
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/hypedigger)
 
+## Credits
+
+UI icons are based on [Lucide](https://lucide.dev) (ISC License, © Lucide Contributors).
+
 ## License
 
 [MIT](LICENSE)

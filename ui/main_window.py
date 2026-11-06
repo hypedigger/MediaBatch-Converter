@@ -1,10 +1,9 @@
 import json
-import math
 import os
 from datetime import datetime
 from typing import List, Optional
 
-from PyQt6.QtCore    import Qt, QSize, QTimer, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore    import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QFileDialog, QCheckBox,
@@ -13,8 +12,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog, QScrollArea, QMenu, QSlider, QStackedWidget,
     QButtonGroup,
 )
-from PyQt6.QtGui import (QFont, QCursor, QIcon, QPixmap, QPainter, QPen, QColor,
-                         QPolygonF)
+from PyQt6.QtGui import QFont, QCursor, QIcon
 
 from core.config    import (APP_TITLE, SUPPORTED_INPUT_FORMATS, OUTPUT_FORMATS,
                              IMAGE_INPUT_FORMATS, IMAGE_OUTPUT_FORMATS,
@@ -35,6 +33,7 @@ from ui.preview_player import PreviewPlayer
 from ui.image_tree  import ImageTreePanel, fmt_bytes, gain_color
 from ui.table_style import style_table
 from ui.toast       import Toast
+from ui.icons       import icon, PALETTE
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
 _INPUT_FORMATS = {
@@ -177,30 +176,6 @@ class _ConflictDialog(QDialog):
         apply_acrylic(int(self.winId()), dark=True)
 
 
-# ── Icône « actualiser » (flèche circulaire dessinée, nette à toute taille) ──
-
-def _refresh_icon(color: str = "#d8ccff") -> QIcon:
-    size = 44                                   # dessinée en 2× puis réduite
-    pix = QPixmap(size, size)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color), 4.2, cap=Qt.PenCapStyle.RoundCap)
-    p.setPen(pen)
-    r = QRectF(8, 8, size - 16, size - 16)
-    p.drawArc(r, 60 * 16, 290 * 16)             # cercle ouvert en haut à droite
-    # Pointe de flèche au bout de l'arc (vers 60°)
-    c = r.center()
-    rad = r.width() / 2
-    tip = QPointF(c.x() + rad * math.cos(math.radians(60)),
-                  c.y() - rad * math.sin(math.radians(60)))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(color))
-    p.drawPolygon(QPolygonF([tip + QPointF(-9, -5), tip + QPointF(6, -9), tip + QPointF(3, 7)]))
-    p.end()
-    return QIcon(pix)
-
-
 # ── Windows Recycle Bin helper (no extra dependency) ─────────────────────────
 
 def _send_to_recycle_bin(path: str):
@@ -266,6 +241,7 @@ class MainWindow(QMainWindow):
             self._mode = "audio"
         self._estimate_thread: Optional[EstimateThread] = None
         self._estimate_pending = False
+        self._icon_buttons: list = []            # (bouton, nom, rôle, taille)
         self._estimate_timer = QTimer(self)
         self._estimate_timer.setSingleShot(True)
         self._estimate_timer.setInterval(400)
@@ -322,10 +298,10 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(16, 0, 0, 0)
         lay.setSpacing(0)
 
-        # Icon
-        self._title_icon = QLabel("🎵")
-        self._title_icon.setFont(QFont("Segoe UI Emoji", 16))
-        self._title_icon.setStyleSheet("margin-right:8px;")
+        # Icon (celle de l'app)
+        self._title_icon = QLabel()
+        self._title_icon.setPixmap(create_app_icon().pixmap(22, 22))
+        self._title_icon.setStyleSheet("margin-right:10px;")
         lay.addWidget(self._title_icon)
 
         # Title
@@ -338,9 +314,10 @@ class MainWindow(QMainWindow):
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_buttons = {}
-        for mode, txt in (("audio", "🎵  Audio"), ("image", "🖼  Images")):
+        for mode, txt, ic in (("audio", " Audio", "music"), ("image", " Images", "image")):
             b = QPushButton(txt)
             b.setObjectName("btn_mode")
+            self._set_icon(b, ic, "text", 15)
             b.setCheckable(True)
             b.setFixedHeight(28)
             b.setChecked(mode == self._mode)
@@ -352,30 +329,33 @@ class MainWindow(QMainWindow):
         lay.addStretch()
 
         # Log button
-        self._btn_log = QPushButton("📋 Logs")
+        self._btn_log = QPushButton(" Logs")
         self._btn_log.setObjectName("btn_icon")
         self._btn_log.setFixedHeight(32)
+        self._set_icon(self._btn_log, "logs", "muted", 17)
         self._btn_log.clicked.connect(self._toggle_log)
         lay.addWidget(self._btn_log)
 
         lay.addSpacing(12)   # séparation avant les contrôles fenêtre
 
         # Settings
-        btn_settings = QPushButton("⚙")
+        btn_settings = QPushButton()
         btn_settings.setObjectName("btn_icon")
-        btn_settings.setFixedSize(46, 32)
-        btn_settings.setFont(QFont("Segoe UI Emoji", 14))
+        btn_settings.setFixedSize(40, 32)
+        btn_settings.setToolTip("Réglages")
+        self._set_icon(btn_settings, "settings", "muted", 18)
         btn_settings.clicked.connect(self._open_settings)
         lay.addWidget(btn_settings)
 
         # Win controls
-        for name, txt, slot in [
-            ("btn_minimize", "─", self.showMinimized),
-            ("btn_maximize", "□", self._toggle_maximize),
-            ("btn_close",    "✕", self.close),
+        for name, ic, slot in [
+            ("btn_minimize", "minimize", self.showMinimized),
+            ("btn_maximize", "maximize", self._toggle_maximize),
+            ("btn_close",    "close",    self.close),
         ]:
-            b = QPushButton(txt)
+            b = QPushButton()
             b.setObjectName(name)
+            self._set_icon(b, ic, "muted", 15 if ic == "maximize" else 16)
             b.clicked.connect(slot)
             lay.addWidget(b)
 
@@ -426,8 +406,10 @@ class MainWindow(QMainWindow):
             self._dir_edit.setText(last)
         dir_row.addWidget(self._dir_edit, 1)
 
-        btn_browse = QPushButton("📂  Parcourir")
+        btn_browse = QPushButton(" Parcourir")
         btn_browse.setObjectName("btn_secondary")
+        btn_browse.setFixedHeight(38)
+        self._set_icon(btn_browse, "folder", "text", 17)
         btn_browse.clicked.connect(self._browse_directory)
         dir_row.addWidget(btn_browse)
         lay.addLayout(dir_row)
@@ -484,22 +466,25 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self._fmt_stack)
         fmt_row.addWidget(scroll, 1)
 
-        self._btn_analyze = QPushButton("📉  Estimer le gain d'espace")
+        self._btn_analyze = QPushButton(" Estimer le gain d'espace")
         self._btn_analyze.setObjectName("btn_accent")
+        self._btn_analyze.setFixedHeight(38)
+        self._set_icon(self._btn_analyze, "estimate", "on_accent", 18)
         self._btn_analyze.setToolTip(
             "Calcule, dossier par dossier, la place que la conversion ferait gagner\n"
             "avec le format et la qualité choisis — sans rien modifier."
         )
         self._btn_analyze.clicked.connect(self._toggle_estimate)
+        fmt_row.addSpacing(12)
         fmt_row.addWidget(self._btn_analyze)
+        fmt_row.addSpacing(8)
 
         # Les fichiers s'affichent dès qu'un dossier est choisi ; ce bouton
         # relit le dossier (formats cochés modifiés, fichiers ajoutés…)
         btn_refresh = QPushButton()
         btn_refresh.setObjectName("btn_refresh")
-        btn_refresh.setFixedSize(44, 38)
-        btn_refresh.setIcon(_refresh_icon())
-        btn_refresh.setIconSize(QSize(22, 22))
+        btn_refresh.setFixedSize(38, 38)
+        self._set_icon(btn_refresh, "refresh", "text", 18)
         btn_refresh.setToolTip(
             "Actualiser la liste\n"
             "Relit le dossier : à utiliser après avoir changé les formats cochés,\n"
@@ -528,9 +513,11 @@ class MainWindow(QMainWindow):
         tool_row.addWidget(self._lbl_count)
         tool_row.addStretch()
 
-        btn_all_sel  = QPushButton("✓ Tout sélectionner")
+        btn_all_sel  = QPushButton(" Tout sélectionner")
+        self._set_icon(btn_all_sel, "check", "text", 16)
         btn_all_sel.clicked.connect(lambda: self._set_all_checked(True))
-        btn_none_sel = QPushButton("✗ Tout désélectionner")
+        btn_none_sel = QPushButton(" Tout désélectionner")
+        self._set_icon(btn_none_sel, "close", "text", 16)
         btn_none_sel.clicked.connect(lambda: self._set_all_checked(False))
         tool_row.addWidget(btn_all_sel)
         tool_row.addWidget(btn_none_sel)
@@ -549,7 +536,7 @@ class MainWindow(QMainWindow):
         self._table.setShowGrid(False)
         self._table.verticalHeader().setVisible(False)
         style_table(self._table, self._settings.get("theme", "dark"))
-        self._table.setIconSize(QSize(0, 0))
+        self._table.setIconSize(QSize(14, 14))
 
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(COL_PLAY,  QHeaderView.ResizeMode.Fixed)
@@ -622,7 +609,7 @@ class MainWindow(QMainWindow):
         io_lay.setSpacing(12)
 
         self._lbl_quality = QLabel("Qualité :")
-        self._lbl_quality.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
+        self._lbl_quality.setObjectName("label_field")
         io_lay.addWidget(self._lbl_quality)
         self._slider_quality = QSlider(Qt.Orientation.Horizontal)
         self._slider_quality.setRange(1, 100)
@@ -635,7 +622,7 @@ class MainWindow(QMainWindow):
 
         io_lay.addSpacing(12)
         lbl_size = QLabel("Côté max :")
-        lbl_size.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
+        lbl_size.setObjectName("label_field")
         io_lay.addWidget(lbl_size)
         self._combo_max_side = QComboBox()
         cur_side = self._settings.get("image_max_side", 0)
@@ -668,7 +655,7 @@ class MainWindow(QMainWindow):
 
         # Format selector
         lbl_fmt = QLabel("Format de sortie :")
-        lbl_fmt.setStyleSheet("color: rgba(255,255,255,160); font-size:13px;")
+        lbl_fmt.setObjectName("label_field")
         ctrl_row.addWidget(lbl_fmt)
 
         # Rempli selon le mode par _apply_mode()
@@ -691,14 +678,16 @@ class MainWindow(QMainWindow):
         ctrl_row.addStretch()
 
         # Convert button
-        self._btn_convert = QPushButton("  ▶  Convertir  ")
+        self._btn_convert = QPushButton(" Convertir")
+        self._set_icon(self._btn_convert, "play", "on_accent", 15)
         self._btn_convert.setObjectName("btn_primary")
         self._btn_convert.setEnabled(False)
         self._btn_convert.clicked.connect(self._start_conversion)
         ctrl_row.addWidget(self._btn_convert)
 
         # Cancel button (hidden)
-        self._btn_cancel_conv = QPushButton("⏹  Annuler")
+        self._btn_cancel_conv = QPushButton(" Annuler")
+        self._set_icon(self._btn_cancel_conv, "stop", "text", 15)
         self._btn_cancel_conv.clicked.connect(self._cancel_conversion)
         self._btn_cancel_conv.hide()
         ctrl_row.addWidget(self._btn_cancel_conv)
@@ -782,7 +771,7 @@ class MainWindow(QMainWindow):
             row = self._table.rowCount()
             self._table.insertRow(row)
 
-            # Play (▶ affiché au survol de la ligne)
+            # Play (icône affichée au survol de la ligne)
             play = QTableWidgetItem("")
             play.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             play.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -902,17 +891,19 @@ class MainWindow(QMainWindow):
 
         file_exists = os.path.isfile(fi.path)
 
-        act_tags      = menu.addAction("🏷  Éditer les tags…")
+        mc = PALETTE["dark"]["text"]                 # menu toujours sombre
+        act_tags      = menu.addAction(icon("tag", mc, 16), "Éditer les tags…")
         act_tags.setEnabled(file_exists and is_editable(fi.extension))
         act_tags.setVisible(self._mode == "audio")
         menu.addSeparator()
-        act_open_dir  = menu.addAction("📂  Ouvrir le répertoire")
-        act_open_file = menu.addAction("▶  Ouvrir le fichier")
+        act_open_dir  = menu.addAction(icon("folder", mc, 16), "Ouvrir le répertoire")
+        act_open_file = menu.addAction(icon("open", mc, 16), "Ouvrir le fichier")
         act_open_file.setEnabled(file_exists)
         menu.addSeparator()
-        act_sel_dir   = menu.addAction("☑  Sélectionner tous les fichiers de ce répertoire")
+        act_sel_dir   = menu.addAction(icon("select", mc, 16),
+                                       "Sélectionner tous les fichiers de ce répertoire")
         menu.addSeparator()
-        act_delete    = menu.addAction("🗑  Supprimer le fichier")
+        act_delete    = menu.addAction(icon("trash", mc, 16), "Supprimer le fichier")
         act_delete.setEnabled(file_exists)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
@@ -989,16 +980,21 @@ class MainWindow(QMainWindow):
     def _play_icon_for_row(self, row: int) -> str:
         fi = self._row_fileinfo(row)
         if fi and self._playing_path and fi.path == self._playing_path:
-            return "⏹"                       # en cours de lecture → clic = stop
+            return "stop"                     # en cours de lecture → clic = stop
         if row == self._hover_row:
-            return "▶"
+            return "play"
         return ""
+
+    def _set_play_cell(self, item: QTableWidgetItem, row: int):
+        name = self._play_icon_for_row(row)
+        color = PALETTE.get(self._settings.get("theme", "dark"), PALETTE["dark"])["text"]
+        item.setIcon(icon(name, color, 14) if name else QIcon())
 
     def _refresh_play_column(self):
         for row in range(self._table.rowCount()):
             item = self._table.item(row, COL_PLAY)
             if item:
-                item.setText(self._play_icon_for_row(row))
+                self._set_play_cell(item, row)
 
     def _on_cell_entered(self, row: int, _col: int):
         if row == self._hover_row:
@@ -1008,14 +1004,14 @@ class MainWindow(QMainWindow):
             if 0 <= r < self._table.rowCount():
                 item = self._table.item(r, COL_PLAY)
                 if item:
-                    item.setText(self._play_icon_for_row(r))
+                    self._set_play_cell(item, r)
 
     def _on_table_left(self):
         old, self._hover_row = self._hover_row, -1
         if 0 <= old < self._table.rowCount():
             item = self._table.item(old, COL_PLAY)
             if item:
-                item.setText(self._play_icon_for_row(old))
+                self._set_play_cell(item, old)
 
     def _on_cell_clicked(self, row: int, col: int):
         if col != COL_PLAY:
@@ -1103,9 +1099,9 @@ class MainWindow(QMainWindow):
             )
         self._btn_convert.setEnabled(count > 0)
         if count > 0:
-            self._btn_convert.setText(f"  ▶  Convertir  ({count})  ")
+            self._btn_convert.setText(f" Convertir  ({count})")
         else:
-            self._btn_convert.setText("  ▶  Convertir  ")
+            self._btn_convert.setText(" Convertir")
         self._schedule_estimate()
 
     def _on_format_changed(self):
@@ -1150,7 +1146,6 @@ class MainWindow(QMainWindow):
     def _apply_mode(self):
         image = self._mode == "image"
         self._mode_buttons[self._mode].setChecked(True)
-        self._title_icon.setText("🖼" if image else "🎵")
         self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
         self._btn_analyze.setVisible(image)
         self._list_stack.setCurrentWidget(self._image_panel if image else self._table)
@@ -1268,7 +1263,7 @@ class MainWindow(QMainWindow):
         self._toast.show_message(
             f"Voulez-vous savoir combien de place la conversion ferait gagner dans "
             f"<b>{name}</b> et ses sous-dossiers ?",
-            "📉  Estimer", self._start_estimate)
+            " Estimer", self._start_estimate, action_icon="estimate")
 
     def _toggle_estimate(self):
         if self._image_panel.is_running():
@@ -1287,8 +1282,10 @@ class MainWindow(QMainWindow):
         self._image_panel.start_estimate(fmt, quality, max_side, keep, parallel)
 
     def _on_estimate_running(self, running: bool):
-        self._btn_analyze.setText("⏹  Arrêter l'estimation" if running
-                                  else "📉  Estimer le gain d'espace")
+        self._btn_analyze.setText(" Arrêter l'estimation" if running
+                                  else " Estimer le gain d'espace")
+        self._set_icon(self._btn_analyze, "stop" if running else "estimate", "on_accent",
+                       15 if running else 18)
 
     # ── Conversion ────────────────────────────────────────────────────────────
 
@@ -1596,11 +1593,24 @@ class MainWindow(QMainWindow):
         theme = self._settings.get("theme", "dark")
         qss   = get_theme(theme)
         self.setStyleSheet(qss)
+        self._refresh_icons()
         style_table(self._table, theme)
         if hasattr(self, "_image_panel"):
             self._image_panel.apply_theme(theme)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _set_icon(self, btn: QPushButton, name: str, role: str = "text", px: int = 18):
+        """Icône au trait, couleur selon le rôle et le thème (mise à jour au changement)."""
+        self._icon_buttons = [e for e in self._icon_buttons if e[0] is not btn]
+        self._icon_buttons.append((btn, name, role, px))
+        theme = self._settings.get("theme", "dark")
+        btn.setIcon(icon(name, PALETTE.get(theme, PALETTE["dark"])[role], px))
+        btn.setIconSize(QSize(px, px))
+
+    def _refresh_icons(self):
+        for btn, name, role, px in list(getattr(self, "_icon_buttons", [])):
+            self._set_icon(btn, name, role, px)
 
     def _set_status(self, msg: str):
         self._status_lbl.setText(msg)

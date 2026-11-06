@@ -5,7 +5,7 @@
 import os
 from typing import Optional
 
-from PyQt6.QtCore    import Qt
+from PyQt6.QtCore    import Qt, QSize
 from PyQt6.QtGui     import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 
 from core.tags   import TAG_FIELDS, read_tags, write_tags, read_cover, write_cover
 from ui.effects  import apply_acrylic
+from ui.icons    import icon, PALETTE
 
 
 _COVER_SIZE = 190
@@ -46,7 +47,7 @@ class TagEditorDialog(QDialog):
         lay.setSpacing(14)
 
         # ── Titre ────────────────────────────────────────────────────────────
-        title = QLabel("🏷  Éditeur de tags")
+        title = QLabel("Éditeur de tags")
         title.setFont(QFont("Segoe UI Variable", 14, QFont.Weight.Bold))
         title.setStyleSheet("color: #c0a0ff;")
         lay.addWidget(title)
@@ -77,7 +78,9 @@ class TagEditorDialog(QDialog):
         )
         cover_col.addWidget(self._cover_lbl)
 
-        btn_cover = QPushButton("🖼  Changer la pochette…")
+        btn_cover = QPushButton(" Changer la pochette…")
+        btn_cover.setIcon(icon("image", PALETTE["dark"]["text"], 16))
+        btn_cover.setIconSize(QSize(16, 16))
         btn_cover.clicked.connect(self._pick_cover)
         cover_col.addWidget(btn_cover)
         cover_col.addStretch()
