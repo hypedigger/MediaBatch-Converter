@@ -50,7 +50,6 @@ class ConversionThread(QThread):
         ffmpeg_path:    str,
         out_fmt:        Dict[str, Any],
         parallel:       int,
-        delete_source:  bool,
         conflict:       str,  # "overwrite" | "rename"
     ):
         super().__init__()
@@ -58,7 +57,6 @@ class ConversionThread(QThread):
         self._ffmpeg_path   = ffmpeg_path
         self._out_fmt       = out_fmt
         self._parallel      = parallel if parallel > 0 else self._auto_parallel()
-        self._delete_source = delete_source
         self._conflict      = conflict
         self._cancelled     = False
 
@@ -154,14 +152,8 @@ class ConversionThread(QThread):
             stderr = result.stderr.decode("utf-8", errors="replace")
             raise RuntimeError(f"FFmpeg exit {result.returncode}: {stderr[-300:]}")
 
-        if self._delete_source:
-            try:
-                os.remove(fi.path)
-            except OSError as e:
-                get_app_logger().warning(
-                    "Impossible de supprimer source %s : %s", fi.path, e
-                )
-
+        # Les originaux éventuellement à supprimer partent à la Corbeille en
+        # fin de conversion, depuis l'interface (core/recycle.py)
         return dst
 
     @staticmethod

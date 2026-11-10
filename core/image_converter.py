@@ -4,7 +4,6 @@ from typing import List, Dict, Any, Tuple
 from core.scanner      import FileInfo
 from core.converter    import ConversionThread, get_output_path
 from core.image_codec  import encode_image
-from core.logger       import get_app_logger
 
 # Message renvoyé quand l'original est conservé (résultat plus lourd)
 SKIPPED = "skipped"
@@ -21,10 +20,9 @@ class ImageConversionThread(ConversionThread):
         max_side:       int,
         keep_if_larger: bool,
         parallel:       int,
-        delete_source:  bool,
         conflict:       str,  # "overwrite" | "rename"
     ):
-        super().__init__(files, "", out_fmt, parallel, delete_source, conflict)
+        super().__init__(files, "", out_fmt, parallel, conflict)
         self._quality        = quality
         self._max_side       = max_side
         self._keep_if_larger = keep_if_larger
@@ -40,8 +38,6 @@ class ImageConversionThread(ConversionThread):
             return fi.path, SKIPPED
 
         dst = get_output_path(fi.path, self._out_fmt["ext"], self._conflict)
-        same_file = os.path.normcase(os.path.abspath(dst)) == \
-                    os.path.normcase(os.path.abspath(fi.path))
 
         # Écriture via un fichier temporaire : un écrasement interrompu ne
         # laisse jamais une image tronquée à la place de l'original
@@ -52,12 +48,4 @@ class ImageConversionThread(ConversionThread):
         os.replace(tmp, dst)
         # Conserver la date de modification (tri chronologique des photos)
         os.utime(dst, (st.st_atime, st.st_mtime))
-
-        if self._delete_source and not same_file:
-            try:
-                os.remove(fi.path)
-            except OSError as e:
-                get_app_logger().warning(
-                    "Impossible de supprimer source %s : %s", fi.path, e
-                )
         return dst, ""

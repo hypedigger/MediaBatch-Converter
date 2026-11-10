@@ -75,7 +75,9 @@ Build the standalone exe yourself with `powershell -File build_exe.ps1` (output:
 
 1. Pick **Audio** or **Images** in the title bar. The app opens on a **start screen**: choose a folder with *Browse*, drop it on the window, or reopen one of your **5 recent folders** (the list can be cleared). Only then does the file list appear — *Home* brings you back. The ↻ button next to the format filters re-reads the folder; it blinks when the ticked formats no longer match the list.
 2. Pick the output format and quality (Images: check the size estimate, or click **Estimate space savings** first).
-3. Convert. Covers and tags (audio) or EXIF (images) follow automatically.
+3. Convert. Covers and tags (audio) or EXIF (images) follow automatically. The list and settings are locked while converting. Ticking *Send originals to the Recycle Bin* moves the converted originals to the Windows Recycle Bin at the end (recoverable — never a permanent delete). A summary shows the space saved, before/after sizes, converted / kept / failed counts and any errors.
+
+![Conversion summary](docs/screenshot-summary.png)
 4. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.
 
 Settings and logs are local files (`config.json`, `logs/`) and are not part of the repository.

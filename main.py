@@ -1,5 +1,5 @@
 """
-MediaBatch Converter — v25 — 10/11/2026
+MediaBatch Converter — v26 — 10/11/2026
 """
 
 import sys

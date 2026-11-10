@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from PyQt6.QtCore    import Qt, QSize, QTimer, QPoint, QEvent, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QFileDialog, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
@@ -35,6 +36,8 @@ from ui.table_style import style_table
 from ui.toast       import Toast
 from ui.icons       import icon, PALETTE
 from ui.home_screen import HomeScreen
+from ui.summary_dialog import SummaryDialog
+from core.recycle   import send_to_recycle_bin
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
 _INPUT_FORMATS = {
@@ -175,40 +178,6 @@ class _ConflictDialog(QDialog):
     def showEvent(self, e):
         super().showEvent(e)
         apply_acrylic(int(self.winId()), dark=True)
-
-
-# ── Windows Recycle Bin helper (no extra dependency) ─────────────────────────
-
-def _send_to_recycle_bin(path: str):
-    import ctypes
-    import ctypes.wintypes
-
-    class _SHFILEOPSTRUCT(ctypes.Structure):
-        _fields_ = [
-            ("hwnd",                  ctypes.wintypes.HWND),
-            ("wFunc",                 ctypes.wintypes.UINT),
-            ("pFrom",                 ctypes.c_wchar_p),
-            ("pTo",                   ctypes.c_wchar_p),
-            ("fFlags",                ctypes.c_ushort),
-            ("fAnyOperationsAborted", ctypes.wintypes.BOOL),
-            ("hNameMappings",         ctypes.c_void_p),
-            ("lpszProgressTitle",     ctypes.c_wchar_p),
-        ]
-
-    FO_DELETE          = 0x0003
-    FOF_ALLOWUNDO      = 0x0040
-    FOF_NOCONFIRMATION = 0x0010
-    FOF_SILENT         = 0x0004
-
-    norm = os.path.normpath(path) + "\x00"   # double-null terminated
-    op = _SHFILEOPSTRUCT()
-    op.wFunc  = FO_DELETE
-    op.pFrom  = norm
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
-
-    rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
-    if rc != 0:
-        raise RuntimeError(f"Impossible d'envoyer vers la corbeille (code {rc})")
 
 
 # ── Main Window ───────────────────────────────────────────────────────────────
@@ -408,6 +377,7 @@ class MainWindow(QMainWindow):
     def _make_top_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("panel_top")
+        self._panel_top = panel
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(12)
@@ -700,7 +670,10 @@ class MainWindow(QMainWindow):
         ctrl_row.addWidget(self._lbl_fmt_desc, 1)
 
         # Delete source checkbox
-        self._chk_delete = QCheckBox("Supprimer la source après conversion")
+        self._chk_delete = QCheckBox("Envoyer les originaux à la corbeille")
+        self._chk_delete.setToolTip(
+            "Après conversion, les fichiers d'origine convertis partent à la Corbeille Windows\n"
+            "(récupérables). Les originaux gardés tels quels ou en erreur ne sont pas touchés.")
         ctrl_row.addWidget(self._chk_delete)
 
         ctrl_row.addStretch()
@@ -1004,7 +977,7 @@ class MainWindow(QMainWindow):
         act_sel_dir   = menu.addAction(icon("select", mc, 16),
                                        "Sélectionner tous les fichiers de ce répertoire")
         menu.addSeparator()
-        act_delete    = menu.addAction(icon("trash", mc, 16), "Supprimer le fichier")
+        act_delete    = menu.addAction(icon("trash", mc, 16), "Envoyer à la corbeille")
         act_delete.setEnabled(file_exists)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
@@ -1042,13 +1015,14 @@ class MainWindow(QMainWindow):
         elif action == act_delete:
             reply = QMessageBox.question(
                 self, "Confirmer la suppression",
-                f"Supprimer définitivement ce fichier ?\n\n{fi.path}",
+                f"Envoyer ce fichier à la corbeille ?\n\n{fi.path}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
                 try:
-                    _send_to_recycle_bin(fi.path)
+                    if not send_to_recycle_bin([fi.path]):
+                        raise RuntimeError("opération refusée ou annulée")
                     self._table.removeRow(row)
                     self._files = [f for f in self._files if f.path != fi.path]
                     n = self._table.rowCount()
@@ -1154,6 +1128,9 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        if getattr(self, "_converting", False):
+            self._set_status("Conversion en cours — attendez la fin pour changer de fichiers.")
+            return
         paths = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile()]
         dirs  = [p for p in paths if os.path.isdir(p)]
         files = [p for p in paths if os.path.isfile(p)]
@@ -1510,6 +1487,7 @@ class MainWindow(QMainWindow):
         # Get parallel setting
         parallel = self._settings.get("parallel", 8)
         delete   = self._chk_delete.isChecked()
+        self._set_busy(True)
 
         # Setup UI
         self._progress_row.show()
@@ -1520,16 +1498,21 @@ class MainWindow(QMainWindow):
         self._set_status(f"Conversion de {len(selected)} fichier(s)…")
 
         # Init summary
+        import time
+        self._conv_sizes = {f.path: f.size for f in selected}
         self._conv_summary = {
             "total":        len(selected),
             "success":      [],   # list of source paths
             "skipped":      [],   # images laissées intactes (résultat plus lourd)
             "failed":       [],   # list of (basename, error_msg)
-            "source_size":  sum(f.size for f in selected),
-            "output_size":  0,
-            "out_ext":      out_fmt["ext"],
-            "conflict":     conflict_mode,
+            "src_size":     0,    # originaux traités (convertis + gardés)
+            "out_size":     0,
+            "to_recycle":   [],   # originaux convertis, à envoyer à la Corbeille
             "delete_source": delete,
+            "cancelled":    False,
+            "t0":           time.monotonic(),
+            "fmt_label":    self._image_options_summary() if image else out_fmt["label"],
+            "folder":       self._dir_edit.text().strip(),
         }
 
         # Start thread
@@ -1542,7 +1525,6 @@ class MainWindow(QMainWindow):
                 max_side       = max_side,
                 keep_if_larger = keep,
                 parallel       = parallel,
-                delete_source  = delete,
                 conflict       = conflict_mode,
             )
         else:
@@ -1551,7 +1533,6 @@ class MainWindow(QMainWindow):
                 ffmpeg_path   = ffmpeg.get_ffmpeg_path(),
                 out_fmt       = out_fmt,
                 parallel      = parallel,
-                delete_source = delete,
                 conflict      = conflict_mode,
             )
         self._thread.progress_updated.connect(self._on_progress)
@@ -1562,6 +1543,7 @@ class MainWindow(QMainWindow):
     def _cancel_conversion(self):
         if self._thread:
             self._thread.cancel()
+            self._conv_summary["cancelled"] = True
             self._set_status("Annulation en cours…")
 
     def _on_progress(self, completed: int, total: int):
@@ -1571,147 +1553,62 @@ class MainWindow(QMainWindow):
 
     def _on_file_done(self, src_path: str, out_path: str, success: bool, msg: str):
         s = self._conv_summary
+        size = self._conv_sizes.get(src_path, 0)
         if success and msg == SKIPPED:
             s["skipped"].append(src_path)
-            s["output_size"] += os.path.getsize(src_path)   # l'original reste
+            s["src_size"] += size
+            s["out_size"] += size                          # l'original reste
         elif success:
             s["success"].append(src_path)
+            s["src_size"] += size
             if out_path and os.path.exists(out_path):
-                s["output_size"] += os.path.getsize(out_path)
+                s["out_size"] += os.path.getsize(out_path)
+            # Un original écrasé par sa propre sortie ne part évidemment pas à la Corbeille
+            if os.path.normcase(os.path.abspath(out_path)) != os.path.normcase(os.path.abspath(src_path)):
+                s["to_recycle"].append(src_path)
         else:
             s["failed"].append((os.path.basename(src_path), msg))
             self._set_status(f"Erreur : {os.path.basename(src_path)} — {msg[:80]}")
 
     def _on_all_done(self):
+        import time
+        s = self._conv_summary
+        s["duration"] = time.monotonic() - s["t0"]
         self._progress_bar.setValue(100)
-        self._lbl_progress.setText("Conversion terminée !")
+        s["recycled"], s["recycle_error"] = 0, False
+        if s["delete_source"] and s["to_recycle"]:
+            n = len(s["to_recycle"])
+            self._lbl_progress.setText(f"Envoi de {n} original(aux) à la corbeille…")
+            self._set_status("Envoi des originaux à la corbeille…")
+            QApplication.processEvents()
+            if send_to_recycle_bin(s["to_recycle"]):
+                s["recycled"] = sum(1 for p in s["to_recycle"] if not os.path.exists(p))
+            s["recycle_error"] = s["recycled"] < n
+            get_app_logger().info("Corbeille : %d / %d original(aux)", s["recycled"], n)
+        self._lbl_progress.setText("Conversion arrêtée" if s["cancelled"] else "Conversion terminée !")
         self._btn_cancel_conv.hide()
         self._btn_convert.show()
-        self._set_status("Conversion terminée.")
+        self._set_busy(False)
+        self._set_status("Conversion arrêtée." if s["cancelled"] else "Conversion terminée.")
         QTimer.singleShot(3000, self._hide_progress)
-        self._show_summary_popup(self._conv_summary)
+        dlg = SummaryDialog(s, dark=self._settings.get("theme", "dark") == "dark", parent=self)
+        dlg.exec()
+        # Des originaux ont pu partir à la Corbeille, des fichiers sont apparus : relire
+        if s["recycled"] or s["success"]:
+            self._scan_directory()
+
+    def _set_busy(self, busy: bool):
+        """Pendant la conversion : sélection, dossier, formats et réglages verrouillés."""
+        self._converting = busy
+        for w in (self._panel_top, self._list_panel, self._img_opts_row,
+                  self._combo_out_fmt, self._chk_delete, *self._mode_buttons.values()):
+            w.setEnabled(not busy)
+        if busy:
+            self._toast.dismiss()
 
     def _hide_progress(self):
         self._progress_row.hide()
         self._progress_bar.setValue(0)
-
-    def _show_summary_popup(self, s: dict):
-        n_ok     = len(s.get("success", []))
-        n_fail   = len(s.get("failed",  []))
-        src_sz   = s.get("source_size", 0)
-        out_sz   = s.get("output_size", 0)
-        delta    = src_sz - out_sz   # positive = freed space
-        delete   = s.get("delete_source", False)
-
-        def _fmt(b: int) -> str:
-            if b >= 1_073_741_824: return f"{b/1_073_741_824:.2f} Go"
-            if b >= 1_048_576:     return f"{b/1_048_576:.1f} Mo"
-            if b >= 1_024:         return f"{b/1_024:.0f} Ko"
-            return f"{b} o"
-
-        dlg = QDialog(self)
-        dlg.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        dlg.setFixedWidth(460)
-
-        outer = QVBoxLayout(dlg)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        card = QWidget()
-        card.setObjectName("central_widget")
-        outer.addWidget(card)
-
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(28, 24, 28, 24)
-        lay.setSpacing(14)
-
-        # Title
-        title = QLabel("✅  Conversion terminée")
-        title.setFont(QFont("Segoe UI Variable", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #a0e8a0;")
-        lay.addWidget(title)
-
-        # Success / failure counts
-        lbl_ok = QLabel(f"✓  {n_ok} fichier(s) converti(s) avec succès")
-        lbl_ok.setStyleSheet("color: rgba(160,240,160,200); font-size:13px;")
-        lay.addWidget(lbl_ok)
-
-        n_skip = len(s.get("skipped", []))
-        if n_skip:
-            lbl_skip = QLabel(f"=  {n_skip} image(s) gardée(s) telle(s) quelle(s) "
-                              "(la conversion les aurait alourdies)")
-            lbl_skip.setWordWrap(True)
-            lbl_skip.setStyleSheet("color: rgba(200,200,220,170); font-size:13px;")
-            lay.addWidget(lbl_skip)
-
-        if n_fail:
-            lbl_err = QLabel(f"✗  {n_fail} fichier(s) en erreur :")
-            lbl_err.setStyleSheet("color: #f08080; font-size:13px;")
-            lay.addWidget(lbl_err)
-            for fname, _emsg in s["failed"][:8]:
-                e = QLabel(f"    • {fname}")
-                e.setStyleSheet("color: rgba(240,160,160,180); font-size:12px;")
-                lay.addWidget(e)
-            if n_fail > 8:
-                lay.addWidget(QLabel(f"    … et {n_fail-8} autre(s)"))
-
-        # Separator
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        lay.addWidget(sep)
-
-        # Disk usage
-        grid = QWidget()
-        g_lay = QGridLayout(grid)
-        g_lay.setContentsMargins(0, 0, 0, 0)
-        g_lay.setHorizontalSpacing(20)
-        g_lay.setVerticalSpacing(6)
-
-        def _row(label, value, color="#c8c8e0"):
-            lbl_l = QLabel(label); lbl_l.setStyleSheet("color:rgba(200,200,220,140);font-size:12px;")
-            lbl_v = QLabel(value); lbl_v.setStyleSheet(f"color:{color};font-size:13px;font-weight:600;")
-            return lbl_l, lbl_v
-
-        l, v = _row("Source :", _fmt(src_sz)); g_lay.addWidget(l, 0, 0); g_lay.addWidget(v, 0, 1)
-        l, v = _row("Sortie :", _fmt(out_sz)); g_lay.addWidget(l, 1, 0); g_lay.addWidget(v, 1, 1)
-
-        if delete:
-            if delta >= 0:
-                color_d, sign = "#80e880", f"−  {_fmt(delta)}"
-            else:
-                color_d, sign = "#f0c060", f"+  {_fmt(-delta)}"
-            l, v = _row("Espace libéré :", sign, color_d)
-        else:
-            if delta >= 0:
-                color_d, sign = "#80e880", f"−  {_fmt(delta)}  (compression)"
-            else:
-                color_d, sign = "#f0c060", f"+  {_fmt(-delta)}  (expansion)"
-            l, v = _row("Différence :", sign, color_d)
-
-        g_lay.addWidget(l, 2, 0); g_lay.addWidget(v, 2, 1)
-
-        if src_sz > 0 and out_sz > 0:
-            pct = int((1 - out_sz / src_sz) * 100)
-            l2 = QLabel("Ratio :")
-            l2.setStyleSheet("color:rgba(200,200,220,140);font-size:12px;")
-            v2 = QLabel(f"{pct:+d}%")
-            v2.setStyleSheet(f"color:{'#80e880' if pct > 0 else '#f0c060'};font-size:13px;font-weight:600;")
-            g_lay.addWidget(l2, 3, 0); g_lay.addWidget(v2, 3, 1)
-
-        lay.addWidget(grid)
-
-        # Close button
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_ok = QPushButton("  Fermer  ")
-        btn_ok.setObjectName("btn_primary")
-        btn_ok.clicked.connect(dlg.accept)
-        btn_row.addWidget(btn_ok)
-        lay.addLayout(btn_row)
-
-        dlg.setStyleSheet(self.styleSheet())
-        dlg.adjustSize()
-        apply_acrylic(int(dlg.winId()), dark=(self._settings.get("theme","dark") == "dark"))
-        dlg.exec()
 
     # ── Log window ────────────────────────────────────────────────────────────
 
