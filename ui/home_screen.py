@@ -190,8 +190,15 @@ class HomeScreen(QWidget):
         self._bar.setObjectName("home_bar")
         self._bar.setCursor(Qt.CursorShape.PointingHandCursor)
         self._bar.setFixedHeight(84)
-        self._bar.clicked.connect(self.browse_requested.emit)
+        self._bar.clicked.connect(self._on_bar)
         self._bar.setParent(self)
+
+    def _on_bar(self):
+        cur = self._current if self._current and os.path.isdir(self._current) else ""
+        if cur:
+            self.open_requested.emit(cur)
+        else:
+            self.browse_requested.emit()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -280,9 +287,17 @@ class HomeScreen(QWidget):
                     stop:0 {g1}, stop:0.5 {g2}, stop:1 {g0});
             }}
         """)
-        self._bar.setIcon(icon("folder", "#ffffff", 24))
+        # Un dossier est déjà sélectionné : la barre l'ouvre ; sinon elle en fait choisir un
         self._bar.setIconSize(QSize(24, 24))
-        self._bar.setText("  Choisir un dossier")
+        if cur:
+            name = os.path.basename(os.path.normpath(cur)) or cur
+            self._bar.setIcon(icon("play", "#ffffff", 22))
+            self._bar.setText(f"  Ouvrir  {QFontMetrics(self._bar.font()).elidedText(name, Qt.TextElideMode.ElideMiddle, 520)}")
+            self._bar.setToolTip(f"Afficher les fichiers de :\n{cur}")
+        else:
+            self._bar.setIcon(icon("folder", "#ffffff", 24))
+            self._bar.setText("  Choisir un dossier")
+            self._bar.setToolTip("Choisir le dossier à convertir")
 
         # Lignes « dossiers récents »
         while self._rows_box.count():
