@@ -19,8 +19,8 @@ from core.config    import (APP_TITLE, SUPPORTED_INPUT_FORMATS, OUTPUT_FORMATS,
                              IMAGE_INPUT_FORMATS, IMAGE_OUTPUT_FORMATS,
                              IMAGE_RESIZE_OPTIONS, DEFAULT_SETTINGS, CONFIG_FILE)
 from core.scanner   import FileInfo, scan_directory, file_info_from_path
-from core.converter import ConversionThread, detect_conflicts
-from core.image_converter import ImageConversionThread, SKIPPED
+from core.converter import ConversionThread, detect_conflicts, clean_name
+from core.image_converter import ImageConversionThread, SKIPPED, REPLACED
 from core.image_estimator import EstimateThread, Estimate
 from core.logger    import get_app_logger
 from core.tags      import is_editable
@@ -611,14 +611,14 @@ class MainWindow(QMainWindow):
         io_lay.addWidget(self._lbl_quality)
         self._slider_quality = QSlider(Qt.Orientation.Horizontal)
         self._slider_quality.setRange(1, 100)
-        self._slider_quality.setFixedWidth(160)
+        self._slider_quality.setFixedWidth(120)
         self._slider_quality.valueChanged.connect(self._on_quality_changed)
         io_lay.addWidget(self._slider_quality)
         self._lbl_quality_val = QLabel("85")
         self._lbl_quality_val.setFixedWidth(28)
         io_lay.addWidget(self._lbl_quality_val)
 
-        io_lay.addSpacing(12)
+        io_lay.addSpacing(4)
         lbl_size = QLabel("Côté max :")
         lbl_size.setObjectName("label_field")
         io_lay.addWidget(lbl_size)
@@ -631,11 +631,50 @@ class MainWindow(QMainWindow):
         self._combo_max_side.currentIndexChanged.connect(self._on_image_option_changed)
         io_lay.addWidget(self._combo_max_side)
 
-        io_lay.addSpacing(12)
-        self._chk_keep = QCheckBox("Garder l'original si le résultat est plus lourd")
+        io_lay.addSpacing(4)
+        self._chk_keep = QCheckBox("Garder l'original si plus lourd")
+        self._chk_keep.setToolTip(
+            "Si l'image convertie est plus lourde que l'original,\n"
+            "l'original reste en place, intact, et aucune sortie n'est écrite.")
         self._chk_keep.setChecked(self._settings.get("image_keep_if_larger", True))
         self._chk_keep.toggled.connect(self._on_image_option_changed)
         io_lay.addWidget(self._chk_keep)
+
+        # Conflits : renommer avec un suffixe (sinon écraser)
+        io_lay.addSpacing(4)
+        self._chk_rename = QCheckBox("Renommer les conflits")
+        self._chk_rename.setToolTip(
+            "Si le fichier de sortie existe déjà (par ex. JPEG → JPEG au même endroit),\n"
+            "le suffixe est ajouté au nom : photo_v2.jpg, puis _v3…\n"
+            "Décoché : le fichier existant est écrasé (l'original passe d'abord par la\n"
+            "corbeille si « Envoyer les originaux à la corbeille » est coché).")
+        self._chk_rename.setChecked(self._settings.get("image_rename_conflicts", True))
+        io_lay.addWidget(self._chk_rename)
+        self._edit_suffix = QLineEdit(self._settings.get("image_rename_suffix", "_v2"))
+        self._edit_suffix.setPlaceholderText("_v2")
+        self._edit_suffix.setFixedWidth(64)
+        self._edit_suffix.setToolTip("Suffixe ajouté au nom en cas de conflit")
+        io_lay.addWidget(self._edit_suffix)
+
+        # Sous-dossier de sortie, créé dans le dossier de chaque original
+        io_lay.addSpacing(4)
+        self._chk_subdir = QCheckBox("Sous-dossier")
+        self._chk_subdir.setToolTip(
+            "Enregistre les images converties dans un sous-dossier créé à côté de\n"
+            "chaque original (par ex. Vacances\\Reduced\\photo.jpg).")
+        self._chk_subdir.setChecked(self._settings.get("image_use_subdir", False))
+        io_lay.addWidget(self._chk_subdir)
+        self._edit_subdir = QLineEdit(self._settings.get("image_subdir", "Reduced"))
+        self._edit_subdir.setPlaceholderText("Reduced")
+        self._edit_subdir.setFixedWidth(96)
+        self._edit_subdir.setToolTip("Nom du sous-dossier")
+        io_lay.addWidget(self._edit_subdir)
+
+        for w in (self._chk_rename, self._chk_subdir):
+            w.toggled.connect(self._on_output_option_changed)
+        for w in (self._edit_suffix, self._edit_subdir):
+            w.textChanged.connect(self._on_output_option_changed)
+        self._on_output_option_changed()
 
         io_lay.addStretch()
         self._lbl_estimate = QLabel()
@@ -734,7 +773,9 @@ class MainWindow(QMainWindow):
     def _on_formats_changed(self, *_):
         """Formats cochés ≠ ceux de la liste affichée → le bouton Actualiser clignote."""
         pending = (self._scanned_exts is not None
-                   and set(self._selected_exts()) != self._scanned_exts)
+                   and (set(self._selected_exts()) != self._scanned_exts
+                        or (self._mode == "image"
+                            and self._output_target()[1] != getattr(self, "_scanned_excl", ""))))
         self._set_refresh_pulse(pending)
 
     def _set_refresh_pulse(self, on: bool):
@@ -828,6 +869,16 @@ class MainWindow(QMainWindow):
         self._set_status("Scan en cours…")
         self._files = scan_directory(path, selected_fmts)
         self._scanned_exts = set(selected_fmts)
+        # Sous-dossiers de sortie (« Reduced ») écartés : on ne reconvertit pas
+        # les images déjà converties
+        self._scanned_excl = self._output_target()[1] if self._mode == "image" else ""
+        if self._scanned_excl:
+            excl = self._scanned_excl.lower()
+            root = os.path.normpath(path)
+            self._files = [
+                f for f in self._files
+                if excl not in (part.lower() for part in
+                                os.path.relpath(os.path.dirname(f.path), root).split(os.sep))]
         self._set_refresh_pulse(False)
         self._remember_directory(path)
         self._refresh_list()
@@ -1319,8 +1370,28 @@ class MainWindow(QMainWindow):
             parts.append(f"qualité {quality}")
         parts.append(f"côté max {max_side} px" if max_side else "taille d'origine")
         if keep:
-            parts.append("original gardé si plus léger")
+            parts.append("original gardé si plus lourd")
+        suffix, subdir = self._output_target()
+        if subdir:
+            parts.append(f"dans .\\{subdir}")
+        parts.append(f"conflits renommés « {suffix} »" if suffix else "conflits écrasés")
         return ", ".join(parts)
+
+    def _output_target(self):
+        """(suffixe de renommage ou "" pour écraser, sous-dossier ou "")."""
+        suffix = clean_name(self._edit_suffix.text(), "_v2") if self._chk_rename.isChecked() else ""
+        subdir = clean_name(self._edit_subdir.text(), "Reduced") if self._chk_subdir.isChecked() else ""
+        return suffix, subdir
+
+    def _on_output_option_changed(self, *_):
+        self._edit_suffix.setEnabled(self._chk_rename.isChecked())
+        self._edit_subdir.setEnabled(self._chk_subdir.isChecked())
+        self._settings["image_rename_conflicts"] = self._chk_rename.isChecked()
+        self._settings["image_rename_suffix"]    = self._edit_suffix.text()
+        self._settings["image_use_subdir"]       = self._chk_subdir.isChecked()
+        self._settings["image_subdir"]           = self._edit_subdir.text()
+        if hasattr(self, "_refresh_buttons"):
+            self._on_formats_changed()      # sous-dossier exclu de la liste → Actualiser
 
     def _on_quality_changed(self, value: int):
         self._lbl_quality_val.setText(str(value))
@@ -1465,9 +1536,12 @@ class MainWindow(QMainWindow):
         if not out_fmt:
             return
 
-        # Detect conflicts
-        conflicts = detect_conflicts(selected, out_fmt)
+        # Detect conflicts (mode Images : réglés par les options Renommer / Sous-dossier)
+        conflicts = [] if image else detect_conflicts(selected, out_fmt)
         conflict_mode = "rename"
+        if image:
+            suffix, subdir = self._output_target()
+            conflict_mode = "rename" if suffix else "overwrite"
 
         if conflicts:
             dlg = _ConflictDialog(conflicts, out_fmt["ext"], self)
@@ -1526,6 +1600,9 @@ class MainWindow(QMainWindow):
                 keep_if_larger = keep,
                 parallel       = parallel,
                 conflict       = conflict_mode,
+                suffix         = suffix,
+                subdir         = subdir,
+                recycle_replaced = delete,
             )
         else:
             self._thread = ConversionThread(
@@ -1563,8 +1640,10 @@ class MainWindow(QMainWindow):
             s["src_size"] += size
             if out_path and os.path.exists(out_path):
                 s["out_size"] += os.path.getsize(out_path)
-            # Un original écrasé par sa propre sortie ne part évidemment pas à la Corbeille
-            if os.path.normcase(os.path.abspath(out_path)) != os.path.normcase(os.path.abspath(src_path)):
+            if msg == REPLACED:
+                # Original remplacé par sa sortie : déjà passé par la Corbeille
+                s["replaced_recycled"] = s.get("replaced_recycled", 0) + 1
+            elif os.path.normcase(os.path.abspath(out_path)) != os.path.normcase(os.path.abspath(src_path)):
                 s["to_recycle"].append(src_path)
         else:
             s["failed"].append((os.path.basename(src_path), msg))
@@ -1585,6 +1664,7 @@ class MainWindow(QMainWindow):
                 s["recycled"] = sum(1 for p in s["to_recycle"] if not os.path.exists(p))
             s["recycle_error"] = s["recycled"] < n
             get_app_logger().info("Corbeille : %d / %d original(aux)", s["recycled"], n)
+        s["recycled"] += s.get("replaced_recycled", 0)
         self._lbl_progress.setText("Conversion arrêtée" if s["cancelled"] else "Conversion terminée !")
         self._btn_cancel_conv.hide()
         self._btn_convert.show()

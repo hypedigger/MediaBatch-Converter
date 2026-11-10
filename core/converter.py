@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any
@@ -9,30 +10,58 @@ from core.scanner import FileInfo
 from core.logger import get_app_logger, get_export_logger
 
 
-def get_output_path(src: str, out_ext: str, conflict: str = "rename") -> str:
+_INVALID_NAME_CHARS = '<>:"/\\|?*'
+
+
+def clean_name(text: str, fallback: str) -> str:
+    """Nom de fichier/dossier sûr (caractères interdits retirés), *fallback* si vide."""
+    text = "".join(c for c in (text or "") if c not in _INVALID_NAME_CHARS).strip().rstrip(".")
+    return text or fallback
+
+
+def _suffix_candidates(suffix: str):
+    """_v2 → _v2, _v3, _v4…   ·   -small → -small, -small2, -small3…"""
+    m = re.match(r"^(.*?)(\d+)$", suffix)
+    if m:
+        head, n = m.group(1), int(m.group(2))
+        while True:
+            yield f"{head}{n}"
+            n += 1
+    yield suffix
+    n = 2
+    while True:
+        yield f"{suffix}{n}"
+        n += 1
+
+
+def get_output_path(src: str, out_ext: str, conflict: str = "rename",
+                    suffix: str = "_v1", subdir: str = "") -> str:
     """
-    Build output path.  conflict = "overwrite" | "rename"
-    For "rename" mode: appends _v1, _v2 ... if the target already exists.
+    Chemin de sortie.  conflict = "overwrite" | "rename"
+    *subdir* : sous-dossier (dans le dossier de l'original) où écrire la sortie.
+    En mode "rename", si la cible existe déjà, ajoute *suffix* (_v2, puis _v3…).
     """
-    base = os.path.splitext(src)[0]
+    folder, name = os.path.split(src)
+    if subdir:
+        folder = os.path.join(folder, subdir)
+    base = os.path.join(folder, os.path.splitext(name)[0])
     dst  = f"{base}.{out_ext}"
 
     if conflict == "overwrite" or not os.path.exists(dst):
         return dst
 
-    # rename: find first available _vN
-    counter = 1
-    while os.path.exists(f"{base}_v{counter}.{out_ext}"):
-        counter += 1
-    return f"{base}_v{counter}.{out_ext}"
+    for sfx in _suffix_candidates(suffix or "_v1"):
+        cand = f"{base}{sfx}.{out_ext}"
+        if not os.path.exists(cand):
+            return cand
 
 
-def detect_conflicts(files: List[FileInfo], out_fmt: Dict[str, Any]) -> List[FileInfo]:
+def detect_conflicts(files: List[FileInfo], out_fmt: Dict[str, Any],
+                     subdir: str = "") -> List[FileInfo]:
     """Return files whose direct output path (same name, new ext) already exists."""
     conflicts = []
     for f in files:
-        direct = os.path.splitext(f.path)[0] + "." + out_fmt["ext"]
-        if os.path.exists(direct):
+        if os.path.exists(get_output_path(f.path, out_fmt["ext"], "overwrite", subdir=subdir)):
             conflicts.append(f)
     return conflicts
 

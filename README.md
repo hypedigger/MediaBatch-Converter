@@ -20,7 +20,9 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - **Quality slider** per format, optional **downscaling** (longest side 1024 → 4096 px).
 - **EXIF, colour profile and DPI preserved**; file modification date kept (your photos stay sorted by date).
 - PNG transparency is flattened onto white for JPEG.
-- **"Keep the original if the result is larger"** — re-compressing an already well-compressed JPEG never makes it heavier.
+- **"Keep the original if larger"** — re-compressing an already well-compressed JPEG never makes it heavier.
+- **"Rename conflicts"** with an editable suffix (`_v2` by default) — when the output already exists (e.g. JPEG → JPEG in place), it is saved as `photo_v2.jpg`, then `_v3`… Untick it to overwrite instead; the original then goes to the Recycle Bin first if *Send originals to the Recycle Bin* is ticked.
+- **"Subfolder"** (`Reduced` by default) — writes the converted images to a subfolder created next to each original (`Holidays\Reduced\photo.jpg`). These output folders are left out of the file list, so they are never converted twice.
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
 - **Folder view**: images are grouped by folder, folders start collapsed (images sitting directly in the chosen folder are listed on their own). Tick a folder to select all its images.
 - **Estimate space savings** (teal button): fills the *Estimated / Gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time; click again to stop.

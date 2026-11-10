@@ -2,7 +2,7 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 26
+APP_VERSION = 27
 APP_DATE = "10/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
@@ -185,5 +185,9 @@ DEFAULT_SETTINGS = {
     "image_quality":         {},        # id de format → qualité choisie
     "image_max_side":        0,
     "image_keep_if_larger":  True,
+    "image_rename_conflicts": True,     # sinon : écraser
+    "image_rename_suffix":   "_v2",
+    "image_use_subdir":      False,
+    "image_subdir":          "Reduced",
     "recent_directories":    [],        # 5 derniers dossiers utilisés
 }
