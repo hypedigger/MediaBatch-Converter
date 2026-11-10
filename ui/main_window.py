@@ -529,17 +529,14 @@ class MainWindow(QMainWindow):
         # Toolbar row : sélection (au-dessus de la colonne des cases), compteur
         tool_row = QHBoxLayout()
         tool_row.setSpacing(6)
-        for ic, tip, state in (
-            ("select_all",  "Tout sélectionner\nCoche toutes les lignes de la liste", True),
-            ("select_none", "Tout désélectionner\nDécoche toutes les lignes de la liste", False),
-        ):
-            b = QPushButton()
-            b.setObjectName("btn_tool")
-            b.setFixedSize(30, 28)
-            b.setToolTip(tip)
-            self._set_icon(b, ic, "text", 16)
-            b.clicked.connect(lambda _c, st=state: self._set_all_checked(st))
-            tool_row.addWidget(b)
+        # Une seule case à trois états (vide / partielle / cochée), comme un en-tête de colonne
+        self._btn_select = QPushButton()
+        self._btn_select.setObjectName("btn_tool")
+        self._btn_select.setFixedSize(30, 28)
+        self._btn_select.clicked.connect(self._toggle_select_all)
+        tool_row.addWidget(self._btn_select)
+        self._sel_count, self._sel_total = 0, 0
+        self._update_select_button(0, 0)
         tool_row.addSpacing(10)
 
         self._lbl_count = QLabel("Aucun fichier — glissez un dossier ici")
@@ -1203,7 +1200,28 @@ class MainWindow(QMainWindow):
             self._btn_convert.setText(f" Convertir  ({count})")
         else:
             self._btn_convert.setText(" Convertir")
+        total = (self._image_panel.file_count() if self._mode == "image"
+                 else self._table.rowCount())
+        self._update_select_button(count, total)
         self._schedule_estimate()
+
+    def _update_select_button(self, count: int, total: int):
+        """Icône et info-bulle de la case « tout sélectionner » selon la sélection."""
+        self._sel_count, self._sel_total = count, total
+        if total and count >= total:
+            ic, tip = "select_all", f"Tout est sélectionné ({total})\nCliquer pour tout désélectionner"
+        elif count:
+            ic, tip = "select_some", f"{count} sur {total} sélectionné(s)\nCliquer pour tout sélectionner"
+        else:
+            ic, tip = "select_none", "Rien n'est sélectionné\nCliquer pour tout sélectionner"
+        self._set_icon(self._btn_select, ic, "text", 16)
+        self._btn_select.setToolTip(tip)
+        self._btn_select.setEnabled(total > 0)
+
+    def _toggle_select_all(self):
+        # Tout coché → tout décocher ; sinon (rien ou une partie) → tout cocher
+        everything = self._sel_total and self._sel_count >= self._sel_total
+        self._set_all_checked(not everything)
 
     def _on_format_changed(self):
         self._update_fmt_desc()

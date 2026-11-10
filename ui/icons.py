@@ -38,6 +38,7 @@ _PATHS = {
     "expand":   '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
     "select_all":   '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/>',
     "select_none":  '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+    "select_some":  '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 12h8"/>',
     "history":  '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'
                 '<path d="M12 7v5l4 2"/>',
     "back":     '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
