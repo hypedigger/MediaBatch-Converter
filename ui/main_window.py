@@ -34,6 +34,7 @@ from ui.image_tree  import ImageTreePanel, fmt_bytes, gain_color
 from ui.table_style import style_table
 from ui.toast       import Toast
 from ui.icons       import icon, PALETTE
+from ui.home_screen import HomeScreen
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
 _INPUT_FORMATS = {
@@ -267,6 +268,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self._apply_mode()
+        self._show_home()
 
     # ═════════════════════════════════════════════════════════════════════════
     # UI BUILD
@@ -374,6 +376,18 @@ class MainWindow(QMainWindow):
     # ── Body ──────────────────────────────────────────────────────────────────
 
     def _make_body(self) -> QWidget:
+        # Écran 1 : choix du dossier (récents / Parcourir) ; écran 2 : la liste
+        self._home = HomeScreen()
+        self._home.browse_requested.connect(self._browse_directory)
+        self._home.open_requested.connect(self._open_directory)
+        self._home.clear_requested.connect(self._clear_history)
+
+        self._screens = QStackedWidget()
+        self._screens.addWidget(self._home)
+        self._screens.addWidget(self._make_work_screen())
+        return self._screens
+
+    def _make_work_screen(self) -> QWidget:
         body = QWidget()
         lay  = QVBoxLayout(body)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -400,9 +414,13 @@ class MainWindow(QMainWindow):
 
         # Directory row
         dir_row = QHBoxLayout()
-        lbl_dir = QLabel("RÉPERTOIRE")
-        lbl_dir.setObjectName("label_section")
-        dir_row.addWidget(lbl_dir)
+        btn_home = QPushButton(" Accueil")
+        btn_home.setObjectName("btn_secondary")
+        btn_home.setFixedHeight(38)
+        btn_home.setToolTip("Revenir au choix du dossier (dossiers récents)")
+        self._set_icon(btn_home, "back", "text", 17)
+        btn_home.clicked.connect(self._show_home)
+        dir_row.addWidget(btn_home)
 
         self._dir_edit = QLineEdit()
         self._dir_edit.setReadOnly(True)
@@ -412,20 +430,13 @@ class MainWindow(QMainWindow):
             self._dir_edit.setText(last)
         dir_row.addWidget(self._dir_edit, 1)
 
-        btn_browse = QPushButton(" Parcourir")
+        btn_browse = QPushButton(" Changer de dossier")
         btn_browse.setObjectName("btn_secondary")
         btn_browse.setFixedHeight(38)
         self._set_icon(btn_browse, "folder", "text", 17)
         btn_browse.clicked.connect(self._browse_directory)
         dir_row.addWidget(btn_browse)
 
-        self._btn_history = QPushButton()
-        self._btn_history.setObjectName("btn_tool")
-        self._btn_history.setFixedSize(38, 38)
-        self._btn_history.setToolTip("Dossiers récents\nLes 5 derniers dossiers utilisés")
-        self._set_icon(self._btn_history, "history", "text", 18)
-        self._btn_history.clicked.connect(self._show_history_menu)
-        dir_row.addWidget(self._btn_history)
         lay.addLayout(dir_row)
 
         sep = QFrame()
@@ -736,11 +747,7 @@ class MainWindow(QMainWindow):
         last = self._dir_edit.text() or os.path.expanduser("~")
         path = QFileDialog.getExistingDirectory(self, "Sélectionner un répertoire", last)
         if path:
-            self._dir_edit.setText(path)
-            self._settings["last_directory"] = path
-            self._save_settings()
-            self._scan_directory()
-            self._suggest_estimate(path)
+            self._open_directory(path)
 
     _REFRESH_TIP = ("Actualiser la liste\n"
                     "Relit le dossier : à utiliser après avoir changé les formats cochés,\n"
@@ -780,39 +787,41 @@ class MainWindow(QMainWindow):
                   if os.path.normcase(p) != os.path.normcase(path)]
         self._settings["recent_directories"] = [path] + recent[:4]
         self._save_settings()
+        if hasattr(self, "_home"):
+            self._refresh_home()
 
-    def _show_history_menu(self):
-        menu = QMenu(self)
-        recent = self._settings.get("recent_directories", [])
-        mc = PALETTE.get(self._settings.get("theme", "dark"), PALETTE["dark"])["text"]
-        if not recent:
-            act = menu.addAction("Aucun dossier récent")
-            act.setEnabled(False)
-        actions = {}
-        for path in recent:
-            act = menu.addAction(icon("folder", mc, 16), path)
-            act.setEnabled(os.path.isdir(path))
-            if not os.path.isdir(path):
-                act.setText(path + "   (introuvable)")
-            actions[act] = path
-        if recent:
-            menu.addSeparator()
-            act_clear = menu.addAction(icon("trash", mc, 16), "Effacer l'historique")
-        else:
-            act_clear = None
-        chosen = menu.exec(self._btn_history.mapToGlobal(self._btn_history.rect().bottomLeft()))
-        if chosen is None:
+    def _clear_history(self):
+        self._settings["recent_directories"] = []
+        self._save_settings()
+        self._refresh_home()
+        self._set_status("Historique des dossiers effacé.")
+
+    # ── Navigation accueil ↔ liste ────────────────────────────────────────────
+
+    def _refresh_home(self):
+        self._home.set_recents(self._settings.get("recent_directories", []),
+                               self._dir_edit.text().strip())
+
+    def _show_home(self):
+        self._toast.dismiss()
+        self._refresh_home()
+        self._screens.setCurrentWidget(self._home)
+
+    def _show_work(self):
+        self._screens.setCurrentIndex(1)
+
+    def _open_directory(self, path: str):
+        """Dossier choisi (Parcourir ou récent) : on l'affiche dans la liste."""
+        if not os.path.isdir(path):
+            self._set_status(f"Dossier introuvable : {path}")
+            self._refresh_home()
             return
-        if chosen is act_clear:
-            self._settings["recent_directories"] = []
-            self._save_settings()
-            self._set_status("Historique des dossiers effacé.")
-        elif chosen in actions:
-            path = actions[chosen]
-            self._dir_edit.setText(path)
-            self._settings["last_directory"] = path
-            self._scan_directory()
-            self._suggest_estimate(path)
+        self._dir_edit.setText(path)
+        self._settings["last_directory"] = path
+        self._save_settings()
+        self._show_work()
+        self._scan_directory()
+        self._suggest_estimate(path)
 
     @property
     def _format_checks(self) -> dict:
@@ -1175,6 +1184,7 @@ class MainWindow(QMainWindow):
         added = [fi for fi in new_files if fi.path not in existing]
         self._files += added
         self._refresh_list()
+        self._show_work()
 
         self._set_status(f"{len(added)} fichier(s) ajouté(s) par glisser-déposer")
         get_app_logger().info("Drag & drop : %d fichier(s) ajouté(s)", len(added))
@@ -1234,11 +1244,14 @@ class MainWindow(QMainWindow):
         self._image_panel.cancel_estimate(silent=True)
         self._apply_mode()
         self._refresh_list()
+        if self._screens.currentIndex() == 1 and os.path.isdir(self._dir_edit.text().strip()):
+            self._scan_directory()          # même dossier, formats du nouveau mode
         self._save_settings()
 
     def _apply_mode(self):
         image = self._mode == "image"
         self._mode_buttons[self._mode].setChecked(True)
+        self._home.set_mode(self._mode)
         self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
         self._btn_analyze.setVisible(image)
         self._list_stack.setCurrentWidget(self._image_panel if image else self._table)
@@ -1688,6 +1701,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(qss)
         self._refresh_icons()
         style_table(self._table, theme)
+        if hasattr(self, "_home"):
+            self._home.set_theme(theme)
         if hasattr(self, "_image_panel"):
             self._image_panel.apply_theme(theme)
 
