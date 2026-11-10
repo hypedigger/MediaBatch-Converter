@@ -242,6 +242,12 @@ class MainWindow(QMainWindow):
         self._estimate_thread: Optional[EstimateThread] = None
         self._estimate_pending = False
         self._icon_buttons: list = []            # (bouton, nom, rôle, taille)
+        self._refresh_buttons: list = []         # un bouton Actualiser par mode
+        self._scanned_exts = None                # formats de la liste affichée
+        self._pulse_on = False
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(550)
+        self._pulse_timer.timeout.connect(self._pulse_step)
         self._estimate_timer = QTimer(self)
         self._estimate_timer.setSingleShot(True)
         self._estimate_timer.setInterval(400)
@@ -412,6 +418,14 @@ class MainWindow(QMainWindow):
         self._set_icon(btn_browse, "folder", "text", 17)
         btn_browse.clicked.connect(self._browse_directory)
         dir_row.addWidget(btn_browse)
+
+        self._btn_history = QPushButton()
+        self._btn_history.setObjectName("btn_tool")
+        self._btn_history.setFixedSize(38, 38)
+        self._btn_history.setToolTip("Dossiers récents\nLes 5 derniers dossiers utilisés")
+        self._set_icon(self._btn_history, "history", "text", 18)
+        self._btn_history.clicked.connect(self._show_history_menu)
+        dir_row.addWidget(self._btn_history)
         lay.addLayout(dir_row)
 
         sep = QFrame()
@@ -459,6 +473,17 @@ class MainWindow(QMainWindow):
                 b.setFixedHeight(26)
                 b.clicked.connect(lambda _c, st=state: self._set_all_formats(st))
                 fmt_lay.addWidget(b)
+            # Relire le dossier : clignote quand les formats cochés ont changé
+            btn_refresh = QPushButton()
+            btn_refresh.setObjectName("btn_tool")
+            btn_refresh.setFixedSize(30, 26)
+            self._set_icon(btn_refresh, "refresh", "text", 15)
+            btn_refresh.setToolTip(self._REFRESH_TIP)
+            btn_refresh.clicked.connect(self._scan_directory)
+            self._refresh_buttons.append(btn_refresh)
+            fmt_lay.addWidget(btn_refresh)
+            for cb in checks.values():
+                cb.toggled.connect(self._on_formats_changed)
             fmt_lay.addStretch()
             self._format_checks_by_mode[mode] = checks
             self._fmt_stack.addWidget(fmt_inner)
@@ -477,21 +502,6 @@ class MainWindow(QMainWindow):
         self._btn_analyze.clicked.connect(self._toggle_estimate)
         fmt_row.addSpacing(12)
         fmt_row.addWidget(self._btn_analyze)
-        fmt_row.addSpacing(8)
-
-        # Les fichiers s'affichent dès qu'un dossier est choisi ; ce bouton
-        # relit le dossier (formats cochés modifiés, fichiers ajoutés…)
-        btn_refresh = QPushButton()
-        btn_refresh.setObjectName("btn_refresh")
-        btn_refresh.setFixedSize(38, 38)
-        self._set_icon(btn_refresh, "refresh", "text", 18)
-        btn_refresh.setToolTip(
-            "Actualiser la liste\n"
-            "Relit le dossier : à utiliser après avoir changé les formats cochés,\n"
-            "ou si des fichiers ont été ajoutés, renommés ou supprimés entre-temps."
-        )
-        btn_refresh.clicked.connect(self._scan_directory)
-        fmt_row.addWidget(btn_refresh)
 
         lay.addLayout(fmt_row)
         return panel
@@ -505,22 +515,26 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
 
-        # Toolbar row
+        # Toolbar row : sélection (au-dessus de la colonne des cases), compteur
         tool_row = QHBoxLayout()
+        tool_row.setSpacing(6)
+        for ic, tip, state in (
+            ("select_all",  "Tout sélectionner\nCoche toutes les lignes de la liste", True),
+            ("select_none", "Tout désélectionner\nDécoche toutes les lignes de la liste", False),
+        ):
+            b = QPushButton()
+            b.setObjectName("btn_tool")
+            b.setFixedSize(30, 28)
+            b.setToolTip(tip)
+            self._set_icon(b, ic, "text", 16)
+            b.clicked.connect(lambda _c, st=state: self._set_all_checked(st))
+            tool_row.addWidget(b)
+        tool_row.addSpacing(10)
 
         self._lbl_count = QLabel("Aucun fichier — glissez un dossier ici")
         self._lbl_count.setObjectName("label_count")
         tool_row.addWidget(self._lbl_count)
         tool_row.addStretch()
-
-        btn_all_sel  = QPushButton(" Tout sélectionner")
-        self._set_icon(btn_all_sel, "check", "text", 16)
-        btn_all_sel.clicked.connect(lambda: self._set_all_checked(True))
-        btn_none_sel = QPushButton(" Tout désélectionner")
-        self._set_icon(btn_none_sel, "close", "text", 16)
-        btn_none_sel.clicked.connect(lambda: self._set_all_checked(False))
-        tool_row.addWidget(btn_all_sel)
-        tool_row.addWidget(btn_none_sel)
         lay.addLayout(tool_row)
 
         # Table
@@ -728,6 +742,78 @@ class MainWindow(QMainWindow):
             self._scan_directory()
             self._suggest_estimate(path)
 
+    _REFRESH_TIP = ("Actualiser la liste\n"
+                    "Relit le dossier : à utiliser après avoir changé les formats cochés,\n"
+                    "ou si des fichiers ont été ajoutés, renommés ou supprimés entre-temps.")
+    _REFRESH_TIP_PENDING = ("Les formats cochés ont changé\n"
+                            "Cliquez pour mettre à jour la liste.")
+
+    def _on_formats_changed(self, *_):
+        """Formats cochés ≠ ceux de la liste affichée → le bouton Actualiser clignote."""
+        pending = (self._scanned_exts is not None
+                   and set(self._selected_exts()) != self._scanned_exts)
+        self._set_refresh_pulse(pending)
+
+    def _set_refresh_pulse(self, on: bool):
+        for b in self._refresh_buttons:
+            b.setToolTip(self._REFRESH_TIP_PENDING if on else self._REFRESH_TIP)
+        if on and not self._pulse_timer.isActive():
+            self._pulse_timer.start()
+            self._pulse_step()
+        elif not on:
+            self._pulse_timer.stop()
+            self._pulse_on = True              # → le pas suivant éteint
+            self._pulse_step()
+
+    def _pulse_step(self):
+        self._pulse_on = not self._pulse_on
+        for b in self._refresh_buttons:
+            b.setProperty("pulse", self._pulse_on)
+            b.style().unpolish(b)
+            b.style().polish(b)
+
+    # ── Dossiers récents ──────────────────────────────────────────────────────
+
+    def _remember_directory(self, path: str):
+        path = os.path.normpath(path)
+        recent = [p for p in self._settings.get("recent_directories", [])
+                  if os.path.normcase(p) != os.path.normcase(path)]
+        self._settings["recent_directories"] = [path] + recent[:4]
+        self._save_settings()
+
+    def _show_history_menu(self):
+        menu = QMenu(self)
+        recent = self._settings.get("recent_directories", [])
+        mc = PALETTE.get(self._settings.get("theme", "dark"), PALETTE["dark"])["text"]
+        if not recent:
+            act = menu.addAction("Aucun dossier récent")
+            act.setEnabled(False)
+        actions = {}
+        for path in recent:
+            act = menu.addAction(icon("folder", mc, 16), path)
+            act.setEnabled(os.path.isdir(path))
+            if not os.path.isdir(path):
+                act.setText(path + "   (introuvable)")
+            actions[act] = path
+        if recent:
+            menu.addSeparator()
+            act_clear = menu.addAction(icon("trash", mc, 16), "Effacer l'historique")
+        else:
+            act_clear = None
+        chosen = menu.exec(self._btn_history.mapToGlobal(self._btn_history.rect().bottomLeft()))
+        if chosen is None:
+            return
+        if chosen is act_clear:
+            self._settings["recent_directories"] = []
+            self._save_settings()
+            self._set_status("Historique des dossiers effacé.")
+        elif chosen in actions:
+            path = actions[chosen]
+            self._dir_edit.setText(path)
+            self._settings["last_directory"] = path
+            self._scan_directory()
+            self._suggest_estimate(path)
+
     @property
     def _format_checks(self) -> dict:
         return self._format_checks_by_mode[self._mode]
@@ -756,6 +842,9 @@ class MainWindow(QMainWindow):
 
         self._set_status("Scan en cours…")
         self._files = scan_directory(path, selected_fmts)
+        self._scanned_exts = set(selected_fmts)
+        self._set_refresh_pulse(False)
+        self._remember_directory(path)
         self._refresh_list()
 
         n = len(self._files)
@@ -1077,7 +1166,9 @@ class MainWindow(QMainWindow):
         if dirs:
             self._dir_edit.setText(dirs[0])
             self._settings["last_directory"] = dirs[0]
-            self._save_settings()
+            self._remember_directory(dirs[0])
+            self._scanned_exts = set(selected_fmts or all_exts)
+            self._set_refresh_pulse(False)
             self._suggest_estimate(dirs[0])
 
         existing = {f.path for f in self._files}
@@ -1138,6 +1229,8 @@ class MainWindow(QMainWindow):
         self._mode = mode
         self._settings["mode"] = mode
         self._files = []
+        self._scanned_exts = None
+        self._set_refresh_pulse(False)
         self._image_panel.cancel_estimate(silent=True)
         self._apply_mode()
         self._refresh_list()

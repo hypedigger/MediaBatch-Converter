@@ -658,6 +658,21 @@ QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 120); color: whit
 QPushButton#btn_refresh:pressed { background: rgba(110, 88, 220, 180); }
 
 QLabel#label_field    { color: rgba(255, 255, 255, 160); font-size: 13px; }
+
+/* Boutons-outils (icône seule) : sélection, historique, actualiser */
+QPushButton#btn_tool {
+    background: rgba(255, 255, 255, 7);
+    border: 1px solid rgba(255, 255, 255, 16);
+    border-radius: 7px;
+    padding: 0;
+}
+QPushButton#btn_tool:hover { background: rgba(110, 88, 220, 110); border-color: rgba(170, 130, 255, 120); }
+QPushButton#btn_tool:pressed { background: rgba(110, 88, 220, 170); }
+/* Formats modifiés : la liste n'est plus à jour */
+QPushButton#btn_tool[pulse="true"] {
+    background: rgba(80, 210, 190, 150);
+    border-color: rgba(140, 255, 235, 220);
+}
 QLabel#label_activity { color: rgba(200, 235, 230, 210); font-size: 12px; }
 
 /* Petits boutons Tous / Aucun collés aux cases de formats */
@@ -739,6 +754,18 @@ QPushButton#btn_refresh {
 QPushButton#btn_refresh:hover { background: rgba(110, 88, 220, 60); }
 
 QLabel#label_field    { color: rgba(30, 20, 60, 170); font-size: 13px; }
+
+QPushButton#btn_tool {
+    background: rgba(0, 0, 0, 4);
+    border: 1px solid rgba(0, 0, 0, 16);
+    border-radius: 7px;
+    padding: 0;
+}
+QPushButton#btn_tool:hover { background: rgba(110, 88, 220, 55); }
+QPushButton#btn_tool[pulse="true"] {
+    background: rgba(16, 150, 120, 110);
+    border-color: rgba(16, 150, 120, 230);
+}
 QLabel#label_activity { color: rgba(10, 100, 85, 230); font-size: 12px; }
 
 QPushButton#btn_chip {

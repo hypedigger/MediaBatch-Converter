@@ -73,7 +73,7 @@ Build the standalone exe yourself with `powershell -File build_exe.ps1` (output:
 
 ## Usage
 
-1. Pick **Audio** or **Images** in the title bar, then choose a folder — its convertible files are listed right away (the ↻ button re-reads the folder after you change the format filters or the files on disk).
+1. Pick **Audio** or **Images** in the title bar, then choose a folder — its convertible files are listed right away. The history button next to *Browse* reopens one of your 5 last folders (the list can be cleared). The ↻ button next to the format filters re-reads the folder; it blinks when the ticked formats no longer match the list.
 2. Pick the output format and quality (Images: check the size estimate, or click **Estimate space savings** first).
 3. Convert. Covers and tags (audio) or EXIF (images) follow automatically.
 4. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.

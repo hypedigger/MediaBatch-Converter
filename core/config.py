@@ -2,8 +2,8 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 20
-APP_DATE = "06/11/2026"
+APP_VERSION = 21
+APP_DATE = "10/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
 if getattr(sys, "frozen", False):
@@ -185,4 +185,5 @@ DEFAULT_SETTINGS = {
     "image_quality":         {},        # id de format → qualité choisie
     "image_max_side":        0,
     "image_keep_if_larger":  True,
+    "recent_directories":    [],        # 5 derniers dossiers utilisés
 }
