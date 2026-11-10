@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import List, Optional
 
-from PyQt6.QtCore    import Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore    import Qt, QSize, QTimer, QPoint, QEvent, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QFileDialog, QCheckBox,
@@ -522,6 +522,8 @@ class MainWindow(QMainWindow):
     def _make_list_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("panel_list")
+        panel.installEventFilter(self)           # redimensionnement → réaligner la case
+        self._list_panel = panel
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
@@ -529,6 +531,10 @@ class MainWindow(QMainWindow):
         # Toolbar row : sélection (au-dessus de la colonne des cases), compteur
         tool_row = QHBoxLayout()
         tool_row.setSpacing(6)
+        # Décalage calculé pour que la case globale tombe pile au-dessus des cases des lignes
+        self._sel_spacer = QWidget()
+        self._sel_spacer.setFixedWidth(0)
+        tool_row.addWidget(self._sel_spacer)
         # Une seule case à trois états (vide / partielle / cochée), comme un en-tête de colonne
         self._btn_select = QPushButton()
         self._btn_select.setObjectName("btn_tool")
@@ -1203,6 +1209,7 @@ class MainWindow(QMainWindow):
         total = (self._image_panel.file_count() if self._mode == "image"
                  else self._table.rowCount())
         self._update_select_button(count, total)
+        QTimer.singleShot(0, self._align_select_button)
         self._schedule_estimate()
 
     def _update_select_button(self, count: int, total: int):
@@ -1217,6 +1224,33 @@ class MainWindow(QMainWindow):
         self._set_icon(self._btn_select, ic, "text", 16)
         self._btn_select.setToolTip(tip)
         self._btn_select.setEnabled(total > 0)
+
+    # Centre de la case à cocher d'une ligne, depuis le début de sa cellule
+    # (mesuré : rembourrage de 8 px de ::item + demi-largeur de l'indicateur)
+    _CHECK_CENTER = 19
+
+    def _align_select_button(self):
+        """Place la case globale exactement au-dessus de la colonne des cases."""
+        if not hasattr(self, "_sel_spacer"):
+            return
+        if self._mode == "image":
+            view = self._image_panel.tree
+            cell_x = view.header().sectionViewportPosition(0) + view.indentation()
+        else:
+            view = self._table
+            cell_x = view.columnViewportPosition(COL_CHECK)
+        if not view.isVisible():
+            return
+        center = view.viewport().mapTo(self._list_panel, QPoint(cell_x + self._CHECK_CENTER, 0)).x()
+        left_margin = self._list_panel.layout().contentsMargins().left()
+        row_spacing = 6                     # espacement de tool_row entre la cale et le bouton
+        self._sel_spacer.setFixedWidth(max(0, round(
+            center - self._btn_select.width() / 2 - left_margin - row_spacing)))
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "_list_panel", None) and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._align_select_button)
+        return super().eventFilter(obj, event)
 
     def _toggle_select_all(self):
         # Tout coché → tout décocher ; sinon (rien ou une partie) → tout cocher
@@ -1273,6 +1307,7 @@ class MainWindow(QMainWindow):
         self._fmt_stack.setCurrentIndex(list(_INPUT_FORMATS).index(self._mode))
         self._btn_analyze.setVisible(image)
         self._list_stack.setCurrentWidget(self._image_panel if image else self._table)
+        QTimer.singleShot(0, self._align_select_button)
         if not image:
             self._toast.dismiss()
         self._img_opts_row.setVisible(image)
