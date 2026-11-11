@@ -2,7 +2,7 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 28
+APP_VERSION = 29
 APP_DATE = "11/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
@@ -190,4 +190,6 @@ DEFAULT_SETTINGS = {
     "image_use_subdir":      False,
     "image_subdir":          "Reduced",
     "recent_directories":    [],        # 5 derniers dossiers utilisés
+    "gain_select_threshold": 30,        # seuil du bouton « Gain ≥ »
+    "notify_when_done":      True,      # son + notification Windows en fin de tâche
 }

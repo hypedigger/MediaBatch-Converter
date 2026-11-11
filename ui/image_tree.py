@@ -172,6 +172,7 @@ class ImageTreePanel(QWidget):
     selection_changed = pyqtSignal()
     running_changed   = pyqtSignal(bool)      # estimation en cours / terminée
     activity_changed  = pyqtSignal()          # texte d'activité / légende modifiés
+    estimate_finished = pyqtSignal(str)       # estimation menée à son terme : résumé
 
     def __init__(self, theme: str = "dark", parent=None):
         super().__init__(parent)
@@ -502,6 +503,10 @@ class ImageTreePanel(QWidget):
             # Plus gros gain en premier (modifiable en cliquant les en-têtes)
             self._tree.sortByColumn(C_GAIN, Qt.SortOrder.DescendingOrder)
         self.running_changed.emit(False)
+        if not stopped:
+            self.estimate_finished.emit(
+                f"{fmt_bytes(self._tot_src)} → ≈ {fmt_bytes(self._tot_est)} : "
+                f"gain ≈ {fmt_bytes(gain)} ({pct:.0f} %) en {_duration(time.monotonic() - self._t0)}")
 
     def _refresh_activity(self):
         th = self._thread

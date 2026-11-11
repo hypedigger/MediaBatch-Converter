@@ -1,6 +1,7 @@
 from PyQt6.QtCore    import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
-                              QLabel, QPushButton, QComboBox, QFrame, QWidget)
+                              QLabel, QPushButton, QComboBox, QFrame, QWidget,
+                              QCheckBox)
 from PyQt6.QtGui     import QFont
 
 from core.config import PARALLEL_OPTIONS
@@ -19,7 +20,7 @@ class SettingsDialog(QDialog):
             Qt.WindowType.Dialog
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(460, 300)
+        self.setFixedSize(460, 350)
 
         self._drag_pos = None
         self._build_ui()
@@ -93,6 +94,11 @@ class SettingsDialog(QDialog):
         grid.addWidget(lbl_para,            2, 0)
         grid.addWidget(self._combo_parallel, 2, 1)
 
+        # Fin de tâche
+        self._chk_notify = QCheckBox("Son et notification Windows en fin d'analyse ou de conversion")
+        self._chk_notify.setToolTip("Son seul si l'app est au premier plan ; notification Windows sinon.")
+        grid.addWidget(self._chk_notify, 3, 0, 1, 2)
+
         c_lay.addLayout(grid)
         c_lay.addStretch()
 
@@ -119,6 +125,7 @@ class SettingsDialog(QDialog):
         parallel = self._settings.get("parallel", 8)
 
         self._combo_theme.setCurrentIndex(0 if theme == "dark" else 1)
+        self._chk_notify.setChecked(self._settings.get("notify_when_done", True))
 
         for i, opt in enumerate(PARALLEL_OPTIONS):
             if opt["value"] == parallel:
@@ -130,6 +137,7 @@ class SettingsDialog(QDialog):
     def _apply(self):
         self._settings["theme"]    = "dark" if self._combo_theme.currentIndex() == 0 else "light"
         self._settings["parallel"] = self._combo_parallel.currentData()
+        self._settings["notify_when_done"] = self._chk_notify.isChecked()
         self.settings_changed.emit(dict(self._settings))
         self.accept()
 

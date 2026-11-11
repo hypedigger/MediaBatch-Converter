@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog, QScrollArea, QMenu, QSlider, QStackedWidget,
     QButtonGroup,
 )
-from PyQt6.QtGui import QFont, QCursor, QIcon
+from PyQt6.QtGui import QFont, QCursor, QIcon, QIntValidator
 
 from core.config    import (APP_TITLE, SUPPORTED_INPUT_FORMATS, OUTPUT_FORMATS,
                              IMAGE_INPUT_FORMATS, IMAGE_OUTPUT_FORMATS,
@@ -37,6 +37,7 @@ from ui.toast       import Toast
 from ui.icons       import icon, PALETTE
 from ui.home_screen import HomeScreen
 from ui.summary_dialog import SummaryDialog
+from ui.notify      import Notifier
 from core.recycle   import send_to_recycle_bin
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
@@ -110,7 +111,7 @@ class _FileTable(QTableWidget):
 
 # ── Conflict dialog ───────────────────────────────────────────────────────────
 
-GAIN_SELECT_THRESHOLD = 30      # % de gain pour le bouton « ≥ 30 % »
+GAIN_SELECT_DEFAULT = 30        # % de gain par défaut du bouton « Gain ≥ »
 
 
 class _ConflictDialog(QDialog):
@@ -518,11 +519,29 @@ class MainWindow(QMainWindow):
         self._update_select_button(0, 0)
 
         # Mode Images : cocher les dossiers où l'estimation promet ≥ 30 % de gain
-        self._btn_select_gain = QPushButton(f" ≥ {GAIN_SELECT_THRESHOLD} %")
+        # [Gain ≥] [30] %  — seuil modifiable, appliqué par le bouton ou Entrée
+        self._gain_box = QWidget()
+        gb = QHBoxLayout(self._gain_box)
+        gb.setContentsMargins(0, 0, 0, 0)
+        gb.setSpacing(4)
+        self._btn_select_gain = QPushButton("Gain ≥")
         self._btn_select_gain.setObjectName("btn_tool")
         self._btn_select_gain.setFixedHeight(28)
         self._btn_select_gain.clicked.connect(self._select_by_gain)
-        tool_row.addWidget(self._btn_select_gain)
+        gb.addWidget(self._btn_select_gain)
+        self._edit_gain = QLineEdit(str(self._settings.get("gain_select_threshold", GAIN_SELECT_DEFAULT)))
+        self._edit_gain.setValidator(QIntValidator(0, 99, self._edit_gain))
+        self._edit_gain.setFixedSize(40, 28)
+        self._edit_gain.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._edit_gain.setStyleSheet("padding: 0 4px;")
+        self._edit_gain.setToolTip("Seuil de gain estimé (%) pour la sélection — Entrée pour appliquer")
+        self._edit_gain.returnPressed.connect(self._select_by_gain)
+        self._edit_gain.textChanged.connect(self._on_gain_threshold_changed)
+        gb.addWidget(self._edit_gain)
+        lbl_pct = QLabel("%")
+        lbl_pct.setObjectName("label_field")
+        gb.addWidget(lbl_pct)
+        tool_row.addWidget(self._gain_box)
         tool_row.addSpacing(10)
 
         self._lbl_count = QLabel("Aucun fichier — glissez un dossier ici")
@@ -585,6 +604,8 @@ class MainWindow(QMainWindow):
         self._image_panel.selection_changed.connect(self._update_convert_btn)
         self._image_panel.running_changed.connect(self._on_estimate_running)
         self._image_panel.activity_changed.connect(self._schedule_place_activity)
+        self._image_panel.estimate_finished.connect(
+            lambda text: self._notify_done("Analyse terminée", text))
         self._update_gain_button()
 
         self._list_stack = QStackedWidget()
@@ -1320,7 +1341,7 @@ class MainWindow(QMainWindow):
         P = self._image_panel
         act, legend = P.activity, P.legend
         left = (self._sel_spacer.width() + self._btn_select.width()
-                + (self._btn_select_gain.sizeHint().width() if self._btn_select_gain.isVisible() else 0)
+                + (self._gain_box.sizeHint().width() + 6 if self._gain_box.isVisible() else 0)
                 + self._lbl_count.sizeHint().width() + 6 * 3 + 10)
         need = act.sizeHint().width() + 2 * 24
         if legend.isVisible() or legend.parent() is not P.act_row:
@@ -1349,18 +1370,32 @@ class MainWindow(QMainWindow):
     def _update_gain_button(self):
         image = self._mode == "image"
         has = image and self._image_panel.has_estimates()
-        self._btn_select_gain.setVisible(image)
+        t = self._gain_threshold()
+        self._gain_box.setVisible(image)
         self._btn_select_gain.setEnabled(has)
         self._btn_select_gain.setToolTip(
-            f"Coche les dossiers dont le gain estimé atteint {GAIN_SELECT_THRESHOLD} % ou plus\n"
-            "(les autres sont décochés)." if has else
-            f"Sélectionner les dossiers à {GAIN_SELECT_THRESHOLD} % de gain ou plus :\n"
+            f"Coche les dossiers dont le gain estimé atteint {t} % ou plus\n"
+            "(les autres sont décochés). Seuil modifiable à droite." if has else
+            f"Sélectionner les dossiers à {t} % de gain ou plus :\n"
             "lancez d'abord « Estimer le gain d'espace ».")
 
+    def _gain_threshold(self) -> int:
+        try:
+            return int(self._edit_gain.text())
+        except ValueError:
+            return GAIN_SELECT_DEFAULT
+
+    def _on_gain_threshold_changed(self, *_):
+        self._settings["gain_select_threshold"] = self._gain_threshold()
+        self._update_gain_button()
+
     def _select_by_gain(self):
-        n_dirs, n_files = self._image_panel.select_by_gain(GAIN_SELECT_THRESHOLD)
+        if not self._image_panel.has_estimates():
+            return
+        t = self._gain_threshold()
+        n_dirs, n_files = self._image_panel.select_by_gain(t)
         self._set_status(
-            f"{n_dirs} dossier(s) à {GAIN_SELECT_THRESHOLD} % de gain ou plus sélectionné(s) "
+            f"{n_dirs} dossier(s) à {t} % de gain ou plus sélectionné(s) "
             f"— {n_files} image(s).")
 
     def _toggle_select_all(self):
@@ -1758,11 +1793,38 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self._set_status("Conversion arrêtée." if s["cancelled"] else "Conversion terminée.")
         QTimer.singleShot(3000, self._hide_progress)
+        if not s["cancelled"]:
+            n_ok = len(s["success"])
+            text = f"{n_ok} fichier(s) converti(s) en {self._fmt_duration(s['duration'])}"
+            if s["failed"]:
+                text += f", {len(s['failed'])} erreur(s)"
+            if s["src_size"]:
+                diff = s["src_size"] - s["out_size"]
+                text += (f" — {fmt_bytes(diff)} de moins" if diff >= 0
+                         else f" — {fmt_bytes(-diff)} de plus")
+            self._notify_done("Conversion terminée" if not s["failed"]
+                              else "Conversion terminée avec des erreurs", text)
         dlg = SummaryDialog(s, dark=self._settings.get("theme", "dark") == "dark", parent=self)
         dlg.exec()
         # Des originaux ont pu partir à la Corbeille, des fichiers sont apparus : relire
         if s["recycled"] or s["success"]:
             self._scan_directory()
+
+    def _notify_done(self, title: str, text: str):
+        """Son si l'app est au premier plan, notification Windows sinon."""
+        if not self._settings.get("notify_when_done", True):
+            return
+        if not hasattr(self, "_notifier"):
+            self._notifier = Notifier(self)
+        self._notifier.notify(title, text)
+
+    @staticmethod
+    def _fmt_duration(sec: float) -> str:
+        sec = int(round(sec))
+        if sec < 60:
+            return f"{sec} s"
+        m, s = divmod(sec, 60)
+        return f"{m} min {s:02d} s" if m < 60 else f"{m // 60} h {m % 60:02d} min"
 
     def _set_busy(self, busy: bool):
         """Pendant la conversion : sélection, dossier, formats et réglages verrouillés."""

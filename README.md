@@ -26,7 +26,7 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
 - **Folder view**: images are grouped by folder, folders start collapsed (images sitting directly in the chosen folder are listed on their own). Tick a folder to select all its images.
 - **Estimate space savings** (teal button): fills the *Estimated / Gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time; click again to stop.
-- **≥ 30 %** button (next to the select-all box): once the estimate is done, ticks every folder whose estimated gain is 30 % or more and unticks the rest — convert only where it's worth it.
+- **Gain ≥ [30] %** (next to the select-all box): once the estimate is done, ticks every folder whose estimated gain reaches the threshold (editable, 30 % by default; press Enter to apply) and unticks the rest — convert only where it's worth it.
 - When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds (it also disappears as soon as you start the estimate from the main button).
 
 ![Space-savings estimate in the folder view](docs/screenshot-estimate.png)
@@ -79,9 +79,10 @@ Build the standalone exe yourself with `powershell -File build_exe.ps1` (output:
 1. Pick **Audio** or **Images** in the title bar. The app opens on a **start screen**: choose a folder with *Browse*, drop it on the window, or reopen one of your **5 recent folders** (the list can be cleared). Only then does the file list appear — *Home* brings you back. The ↻ button next to the format filters re-reads the folder; it blinks when the ticked formats no longer match the list.
 2. Pick the output format and quality (Images: check the size estimate, or click **Estimate space savings** first).
 3. Convert. Covers and tags (audio) or EXIF (images) follow automatically. The list and settings are locked while converting. Ticking *Send originals to the Recycle Bin* moves the converted originals to the Windows Recycle Bin at the end (recoverable — never a permanent delete). A summary shows the space saved, before/after sizes, converted / kept / failed counts and any errors.
+4. When an estimate or a conversion finishes, the app plays a sound — or, if you've switched to another window, shows a Windows notification (click it to come back). Can be turned off in Settings.
 
 ![Conversion summary](docs/screenshot-summary.png)
-4. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.
+5. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.
 
 Settings and logs are local files (`config.json`, `logs/`) and are not part of the repository.
 
