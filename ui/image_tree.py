@@ -13,11 +13,11 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore    import Qt, QTimer, QRectF, QPointF, QEvent, pyqtSignal
+from PyQt6.QtCore    import Qt, QTimer, QRectF, QPointF, QEvent, QEventLoop, pyqtSignal
 from PyQt6.QtGui     import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
                               QTreeWidgetItem, QHeaderView, QAbstractItemView, QMenu,
-                              QMessageBox, QLineEdit)
+                              QMessageBox, QLineEdit, QApplication)
 
 from core.image_estimator import Estimate, GroupEstimateThread
 from core.scanner         import FileInfo
@@ -88,30 +88,40 @@ _CENTER = Qt.AlignmentFlag.AlignCenter
 
 
 class _Item(QTreeWidgetItem):
-    """Ligne triable : chaque colonne peut porter une valeur de tri numérique."""
+    """
+    Ligne triable : chaque colonne peut porter une valeur de tri numérique.
+    Le tri appelle __lt__ des millions de fois sur un gros dossier (400 000
+    images) : colonne et sens de tri sont lus dans des attributs de classe
+    (tenus à jour par le panneau) et le texte minuscule est précalculé.
+    """
+
+    sort_col  = 0
+    sort_desc = False
 
     def __init__(self):
         super().__init__()
         self.keys: Dict[int, float] = {}
+        self.txt:  Dict[int, str]   = {}
 
     def set(self, col: int, text: str, key: Optional[float] = None, align=None):
         self.setText(col, text)
         if key is None:
             self.keys.pop(col, None)
+            self.txt[col] = text.lower()
         else:
             self.keys[col] = key
         if align is not None:
             self.setTextAlignment(col, align)
 
     def __lt__(self, other):
-        col = self.treeWidget().sortColumn() if self.treeWidget() else 0
-        a, b = self.keys.get(col), getattr(other, "keys", {}).get(col)
+        col = _Item.sort_col
+        a, b = self.keys.get(col), other.keys.get(col)
         if a is not None and b is not None:
             return a < b
-        if (a is None) != (b is None):          # lignes sans valeur : toujours en bas
-            return a is None if self.treeWidget().header().sortIndicatorOrder() \
-                == Qt.SortOrder.DescendingOrder else b is None
-        return self.text(col).lower() < other.text(col).lower()
+        if a is None and b is None:
+            return self.txt.get(col, "") < other.txt.get(col, "")
+        # Lignes sans valeur : toujours en bas
+        return a is None if _Item.sort_desc else b is None
 
 
 class _Tree(QTreeWidget):
@@ -193,6 +203,7 @@ class ImageTreePanel(QWidget):
         self._groups: Dict[str, Tuple[Optional[_Item], List[Tuple[FileInfo, _Item]]]] = {}
         self._thread: Optional[GroupEstimateThread] = None
         self._hidden: set = set()           # groupes masqués par le filtre
+        self._estimated: set = set()        # groupes dont les colonnes d'estimation sont remplies
         self._t0 = 0.0
         self._tot_src = self._tot_est = self._n_done = 0
 
@@ -237,6 +248,9 @@ class ImageTreePanel(QWidget):
         self._tree.setRootIsDecorated(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        # Connecté avant le tri de Qt (setSortingEnabled) : _Item connaît la
+        # colonne de tri avant que les comparaisons commencent
+        self._tree.header().sortIndicatorChanged.connect(self._on_sort_indicator)
         self._tree.setSortingEnabled(True)
         self._tree.sortByColumn(C_NAME, Qt.SortOrder.AscendingOrder)
         hdr = self._tree.header()
@@ -281,12 +295,36 @@ class ImageTreePanel(QWidget):
         tree.blockSignals(True)
         tree.clear()
         self._groups = {}
+        self._estimated = set()
 
         by_dir: Dict[str, List[FileInfo]] = defaultdict(list)
         for fi in files:
             by_dir[os.path.normpath(fi.directory)].append(fi)
 
+        # Calculés une fois (des centaines de milliers de lignes possibles)
+        folder_flags = (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                        Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
+        file_flags = (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                      Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemNeverHasChildren)
+        unchecked, user_role = Qt.CheckState.Unchecked, Qt.ItemDataRole.UserRole
+        dates: Dict[int, str] = {}
+
+        def date_str(ts: float) -> str:
+            m = int(ts // 60)
+            s = dates.get(m)
+            if s is None:
+                s = dates[m] = datetime.fromtimestamp(ts).strftime("%d/%m/%Y  %H:%M")
+            return s
+
+        # Gros dossier : la fenêtre continue de se redessiner pendant le
+        # remplissage (sinon Windows la déclare « ne répond pas »)
+        tick = time.monotonic()
+        tree.setUpdatesEnabled(False)
+
         for directory, group in by_dir.items():
+            if time.monotonic() - tick > 0.25:
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                tick = time.monotonic()
             group.sort(key=lambda f: f.name.lower())
             loose = directory == self._root
             folder = None
@@ -299,15 +337,14 @@ class ImageTreePanel(QWidget):
                 folder.set(C_NAME, rel if not rel.startswith("..") else directory)
                 folder.setIcon(C_NAME, self._folder_icon())
                 folder.setToolTip(C_NAME, directory)
-                folder.setData(C_NAME, Qt.ItemDataRole.UserRole, ("dir", directory))
-                folder.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
-                                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
-                folder.setCheckState(C_NAME, Qt.CheckState.Unchecked)
+                folder.setData(C_NAME, user_role, ("dir", directory))
+                folder.setFlags(folder_flags)
+                folder.setCheckState(C_NAME, unchecked)
                 size = sum(f.size for f in group)
                 folder.set(C_COUNT, _n(len(group)), len(group), _RIGHT)
                 folder.set(C_SIZE, fmt_bytes(size), size, _RIGHT)
                 last = max(f.date_created for f in group)
-                folder.set(C_DATE, datetime.fromtimestamp(last).strftime("%d/%m/%Y  %H:%M"), last)
+                folder.set(C_DATE, date_str(last), last)
                 exts = sorted({f.extension.upper() for f in group})
                 folder.set(C_EXT, ", ".join(exts), None, _CENTER)
                 folder.setToolTip(C_EXT, ", ".join(exts))
@@ -318,18 +355,22 @@ class ImageTreePanel(QWidget):
                 it = _Item()
                 it.set(C_NAME, fi.name)
                 it.setToolTip(C_NAME, fi.path)
-                it.setData(C_NAME, Qt.ItemDataRole.UserRole, fi)
-                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
-                            Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemNeverHasChildren)
-                it.setCheckState(C_NAME, Qt.CheckState.Unchecked)
+                it.setData(C_NAME, user_role, fi)
+                it.setFlags(file_flags)
+                it.setCheckState(C_NAME, unchecked)
                 it.set(C_SIZE, fi.size_str(), fi.size, _RIGHT)
-                it.set(C_DATE, datetime.fromtimestamp(fi.date_created).strftime("%d/%m/%Y  %H:%M"),
-                       fi.date_created)
+                it.set(C_DATE, date_str(fi.date_created), fi.date_created)
                 it.set(C_EXT, fi.extension.upper(), None, _CENTER)
-                (folder.addChild if folder else tree.addTopLevelItem)(it)
                 items.append((fi, it))
+            rows = [it for _fi, it in items]
+            if folder:
+                folder.addChildren(rows)
+            else:
+                tree.addTopLevelItems(rows)
             self._groups[directory] = (folder, items)
 
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        tree.setUpdatesEnabled(True)
         tree.blockSignals(False)
         tree.setSortingEnabled(True)
         self._hidden = set()
@@ -452,13 +493,15 @@ class ImageTreePanel(QWidget):
 
     def set_all_checked(self, state: bool):
         cs = Qt.CheckState.Checked if state else Qt.CheckState.Unchecked
-        self._tree.blockSignals(True)
+        self._quiet(True)
         for _key, folder, items in self._visible_groups():
-            for _fi, it in items:
-                it.setCheckState(C_NAME, cs)
             if folder is not None:
+                # Dossier « auto-tristate » : Qt coche ses images lui-même
                 folder.setCheckState(C_NAME, cs)
-        self._tree.blockSignals(False)
+            else:
+                for _fi, it in items:
+                    it.setCheckState(C_NAME, cs)
+        self._quiet(False)
         self._tree.viewport().update()
         self.selection_changed.emit()
 
@@ -472,14 +515,12 @@ class ImageTreePanel(QWidget):
         Retourne (dossiers retenus, images cochées).
         """
         n_dirs = n_files = 0
-        self._tree.blockSignals(True)
+        self._quiet(True)
         for _key, folder, items in self._visible_groups():
             if folder is not None:
                 ok = folder.keys.get(C_PCT, -1e9) >= threshold
                 cs = Qt.CheckState.Checked if ok else Qt.CheckState.Unchecked
-                folder.setCheckState(C_NAME, cs)
-                for _fi, it in items:
-                    it.setCheckState(C_NAME, cs)
+                folder.setCheckState(C_NAME, cs)      # ses images suivent (auto-tristate)
                 if ok:
                     n_dirs += 1
                     n_files += len(items)
@@ -488,7 +529,7 @@ class ImageTreePanel(QWidget):
                     ok = it.keys.get(C_PCT, -1e9) >= threshold
                     it.setCheckState(C_NAME, Qt.CheckState.Checked if ok else Qt.CheckState.Unchecked)
                     n_files += ok
-        self._tree.blockSignals(False)
+        self._quiet(False)
         self._tree.viewport().update()
         self.selection_changed.emit()
         return n_dirs, n_files
@@ -506,10 +547,14 @@ class ImageTreePanel(QWidget):
         if not self._groups:
             return
         self.cancel_estimate(silent=True)
-        self._clear_estimates()
         groups = {k: [fi for fi, _it in items] for k, _f, items in self._visible_groups()}
         if not groups:
             return
+        # Pas de tri pendant l'estimation : chaque dossier estimé obligerait Qt
+        # à retrier toute la liste (gel complet sur des centaines de milliers
+        # d'images). Un seul tri, à la fin.
+        self._tree.setSortingEnabled(False)
+        self._clear_estimates()
         self._tot_src = self._tot_est = self._n_done = 0
         self._t0 = time.monotonic()
         self._legend.show()
@@ -552,23 +597,54 @@ class ImageTreePanel(QWidget):
             return
         if self.is_running():
             self.cancel_estimate(silent=True)
-        if any(it.text(C_EST) for _fi, it in self._file_items()):
+            self._tree.setSortingEnabled(True)
+        if self._estimated:
             self._clear_estimates()
             self._spinner.set_state("idle")
             self._set_activity(
                 "Réglages modifiés : cliquez sur « Estimer le gain d'espace » pour mettre à jour "
                 "les colonnes Taille compressée / Gain estimé.")
 
+    def _quiet(self, on: bool):
+        """
+        Coupe les signaux de la liste et de son modèle pendant une modification
+        en masse (cases, textes) : sur des centaines de milliers de lignes,
+        chaque notification à la vue coûte cher. Redessin unique à la fin.
+        """
+        self._tree.blockSignals(on)
+        self._tree.model().blockSignals(on)
+        if not on:
+            self._tree.viewport().update()
+
+    @staticmethod
+    def _on_sort_indicator(col: int, order):
+        _Item.sort_col  = col
+        _Item.sort_desc = order == Qt.SortOrder.DescendingOrder
+
     def _clear_estimates(self):
-        self._tree.setSortingEnabled(False)
-        for folder, items in self._groups.values():
+        if not self._estimated:
+            return
+        tree = self._tree
+        sorting = tree.isSortingEnabled()
+        tree.setSortingEnabled(False)
+        tree.setUpdatesEnabled(False)
+        self._quiet(True)
+        for key in self._estimated:
+            entry = self._groups.get(key)
+            if entry is None:
+                continue
+            folder, items = entry
             rows = [it for _fi, it in items] + ([folder] if folder else [])
             for it in rows:
                 for col in _EST_COLS:
                     it.set(col, "")
                     it.setData(col, ACCENT_ROLE, None)
                     it.setToolTip(col, "")
-        self._tree.setSortingEnabled(True)
+        self._estimated = set()
+        self._quiet(False)
+        tree.setUpdatesEnabled(True)
+        if sorting:
+            tree.setSortingEnabled(True)
 
     def _on_group_done(self, key: str, est: Estimate):
         entry = self._groups.get(key)
@@ -578,9 +654,10 @@ class ImageTreePanel(QWidget):
         self._n_done += 1
         self._tot_src += est.src_bytes
         self._tot_est += est.est_bytes
+        self._estimated.add(key)
 
         tree = self._tree
-        tree.setSortingEnabled(False)            # sinon les lignes bougent pendant l'écriture
+        self._quiet(True)                    # pas de notification par cellule
         if folder is not None:
             self._fill(folder, est.src_bytes, est.est_bytes)
             folder.set(C_MARGIN, "exacte" if est.exact else f"± {est.margin * 100:.0f} %",
@@ -597,7 +674,7 @@ class ImageTreePanel(QWidget):
                           else "Prédite d'après la qualité et la taille du fichier"
                           if measured is False
                           else "Extrapolée d'après la taille (dossier volumineux)")
-        tree.setSortingEnabled(True)
+        self._quiet(False)
 
     @staticmethod
     def _fill(it: _Item, src: int, est_b: int):
@@ -625,7 +702,8 @@ class ImageTreePanel(QWidget):
             f"·  {_n(snap['samples'])} conversion(s) d'essai, rien n'a été écrit sur le disque")
         if not stopped:
             # Plus gros gain en premier (modifiable en cliquant les en-têtes)
-            self._tree.sortByColumn(C_GAIN, Qt.SortOrder.DescendingOrder)
+            self._tree.header().setSortIndicator(C_GAIN, Qt.SortOrder.DescendingOrder)
+        self._tree.setSortingEnabled(True)      # un seul tri, suspendu pendant l'estimation
         self.running_changed.emit(False)
         if not stopped:
             self.estimate_finished.emit(

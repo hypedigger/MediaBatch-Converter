@@ -276,7 +276,8 @@ def estimate_files(
     first = [files[i] for i in order[:h]]
     planned = sum(not _header_cached(f) for f in first)
     tick("plan", planned)
-    hdrs = [_header(f) for f in first] if not executor else list(executor.map(_header, first))
+    read = lambda f: None if cancelled() else _header(f)
+    hdrs = [read(f) for f in first] if not executor else list(executor.map(read, first))
     tick("header", planned)
     if cancelled():
         return None

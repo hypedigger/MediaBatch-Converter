@@ -39,8 +39,18 @@ def _init_worker():
     try:
         import ctypes
         BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+        SYNCHRONIZE = 0x00100000
         k32 = ctypes.windll.kernel32
         k32.SetPriorityClass(k32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+        # Si l'application plante ou est tuée, ses processus d'encodage ne
+        # sont pas prévenus et resteraient en mémoire : chacun surveille
+        # l'application et s'arrête dès qu'elle disparaît
+        parent = k32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+        if parent:
+            def watch():
+                k32.WaitForSingleObject(parent, 0xFFFFFFFF)
+                os._exit(0)
+            threading.Thread(target=watch, daemon=True).start()
     except Exception:
         pass
 
