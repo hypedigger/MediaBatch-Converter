@@ -344,6 +344,7 @@ class MainWindow(QMainWindow):
         tb.mousePressEvent   = self._tb_press
         tb.mouseMoveEvent    = self._tb_move
         tb.mouseReleaseEvent = self._tb_release
+        tb.mouseDoubleClickEvent = self._tb_double_click     # double-clic : agrandir / restaurer
         return tb
 
     # ── Body ──────────────────────────────────────────────────────────────────
@@ -1939,14 +1940,28 @@ class MainWindow(QMainWindow):
     def _tb_press(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_gpos = event.globalPosition().toPoint()
 
     def _tb_move(self, event):
         if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
-            if not self.isMaximized():
-                self.move(event.globalPosition().toPoint() - self._drag_pos)
+            gp = event.globalPosition().toPoint()
+            if self.isMaximized():
+                if (gp - self._press_gpos).manhattanLength() < QApplication.startDragDistance():
+                    return          # simple tremblement du clic (double-clic…)
+                # Comme Windows : tirer la barre d'une fenêtre agrandie la restaure,
+                # le curseur gardant sa position relative sur la barre
+                ratio = self._drag_pos.x() / max(1, self.width())
+                self.showNormal()
+                self._drag_pos.setX(int(self.width() * ratio))
+            self.move(gp - self._drag_pos)
 
     def _tb_release(self, _event):
         self._drag_pos = None
+
+    def _tb_double_click(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = None
+            self._toggle_maximize()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

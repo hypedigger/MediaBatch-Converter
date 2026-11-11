@@ -2,7 +2,7 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 29
+APP_VERSION = 30
 APP_DATE = "11/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
