@@ -8,15 +8,16 @@ colonnes taille estimée / gain / gain % / marge, dossier par dossier.
 import os
 import subprocess
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore    import Qt, QTimer, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore    import Qt, QTimer, QRectF, QPointF, QEvent, pyqtSignal
 from PyQt6.QtGui     import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
                               QTreeWidgetItem, QHeaderView, QAbstractItemView, QMenu,
-                              QMessageBox)
+                              QMessageBox, QLineEdit)
 
 from core.image_estimator import Estimate, GroupEstimateThread
 from core.scanner         import FileInfo
@@ -75,6 +76,12 @@ _HEADERS = ["Nom", "Images", "Taille", "Date", "Ext.", "Taille compressée", "Ga
 _DEFAULT_WIDTHS = {C_COUNT: 70, C_SIZE: 88, C_DATE: 130, C_EXT: 70,
                    C_EST: 150, C_GAIN: 110, C_PCT: 72, C_MARGIN: 86}
 _MIN_WIDTH = 40
+
+
+def _fold(text: str) -> str:
+    """Minuscules sans accents, pour un filtre tolérant (« ecosse » → « Écosse »)."""
+    return "".join(c for c in unicodedata.normalize("NFD", text.casefold())
+                   if not unicodedata.combining(c))
 _EST_COLS = (C_EST, C_GAIN, C_PCT, C_MARGIN)
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _CENTER = Qt.AlignmentFlag.AlignCenter
@@ -185,6 +192,7 @@ class ImageTreePanel(QWidget):
         # clé de groupe (dossier) → (ligne du dossier ou None, [(FileInfo, ligne)])
         self._groups: Dict[str, Tuple[Optional[_Item], List[Tuple[FileInfo, _Item]]]] = {}
         self._thread: Optional[GroupEstimateThread] = None
+        self._hidden: set = set()           # groupes masqués par le filtre
         self._t0 = 0.0
         self._tot_src = self._tot_est = self._n_done = 0
 
@@ -248,6 +256,7 @@ class ImageTreePanel(QWidget):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         style_table(self._tree, theme)
+        lay.addWidget(self._make_filter_row())
         lay.addWidget(self._tree, 1)
 
         self._timer = QTimer(self)
@@ -323,17 +332,105 @@ class ImageTreePanel(QWidget):
 
         tree.blockSignals(False)
         tree.setSortingEnabled(True)
+        self._hidden = set()
+        if self._filter.text().strip():
+            self._apply_filter()            # le filtre saisi s'applique au nouveau contenu
+        else:
+            self._lbl_filter.setText("")
         self._set_hint()
         self.selection_changed.emit()
 
     def clear(self):
         self.populate([], self._root)
 
-    def file_count(self) -> int:
+    def file_count(self, visible_only: bool = False) -> int:
+        if visible_only:
+            return sum(len(items) for _k, _f, items in self._visible_groups())
         return sum(len(items) for _f, items in self._groups.values())
 
     def folder_count(self) -> int:
         return sum(1 for f, _items in self._groups.values() if f is not None)
+
+    # ── Filtre des dossiers ───────────────────────────────────────────────────
+    # Les dossiers masqués par le filtre sont hors jeu : ni cochés par « tout
+    # sélectionner » / « Gain ≥ », ni convertis, ni estimés. Leurs cases sont
+    # conservées et retrouvent leur effet quand le filtre est effacé.
+
+    def _make_filter_row(self) -> QWidget:
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(10)
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filtrer les dossiers…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.setFixedWidth(340)
+        self._filter.setFixedHeight(34)
+        self._filter.setToolTip(
+            "Affiche seulement les dossiers dont le nom contient ce texte\n"
+            "(plusieurs mots : tous doivent y figurer ; accents et majuscules ignorés).\n"
+            "Les dossiers masqués ne sont ni sélectionnés, ni estimés, ni convertis.\n"
+            "Échap pour effacer.")
+        self._filter_action = self._filter.addAction(
+            icon("search", PALETTE[self._theme]["muted"], 16),
+            QLineEdit.ActionPosition.LeadingPosition)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self._filter.textChanged.connect(lambda _t: self._filter_timer.start())
+        self._filter.installEventFilter(self)
+        self._lbl_filter = QLabel()
+        self._lbl_filter.setObjectName("label_desc")
+        h.addWidget(self._filter)
+        h.addWidget(self._lbl_filter)
+        h.addStretch(1)
+        return row
+
+    def eventFilter(self, obj, event):
+        if (obj is getattr(self, "_filter", None) and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape and self._filter.text()):
+            self._filter.clear()
+            return True
+        return super().eventFilter(obj, event)
+
+    def filter_active(self) -> bool:
+        return bool(self._filter.text().strip())
+
+    def _apply_filter(self):
+        words = _fold(self._filter.text()).split()
+        hidden = set()
+        n_dirs = n_shown = 0
+        self._tree.setUpdatesEnabled(False)
+        for key, (folder, items) in self._groups.items():
+            if folder is not None:
+                n_dirs += 1
+                ok = all(w in _fold(folder.text(C_NAME)) for w in words)
+                folder.setHidden(not ok)
+                n_shown += ok
+                if not ok:
+                    hidden.add(key)
+            else:
+                # Images à la racine du dossier : filtrées sur leur nom
+                any_ok = False
+                for _fi, it in items:
+                    ok = all(w in _fold(it.text(C_NAME)) for w in words)
+                    it.setHidden(not ok)
+                    any_ok = any_ok or ok
+                if not any_ok and words:
+                    hidden.add(key)
+        self._tree.setUpdatesEnabled(True)
+        self._hidden = hidden
+        self._lbl_filter.setText(f"{n_shown} / {n_dirs} dossier(s) affiché(s)" if words else "")
+        self.selection_changed.emit()
+
+    def _visible_groups(self):
+        for key, (folder, items) in self._groups.items():
+            if key in self._hidden:
+                continue
+            if folder is None:
+                items = [(fi, it) for fi, it in items if not it.isHidden()]
+            yield key, folder, items
 
     # ── Sélection ─────────────────────────────────────────────────────────────
 
@@ -341,18 +438,22 @@ class ImageTreePanel(QWidget):
         for _folder, items in self._groups.values():
             yield from items
 
+    def _visible_file_items(self):
+        for _key, _folder, items in self._visible_groups():
+            yield from items
+
     def checked_files(self) -> List[FileInfo]:
-        return [fi for fi, it in self._file_items()
+        return [fi for fi, it in self._visible_file_items()
                 if it.checkState(C_NAME) == Qt.CheckState.Checked]
 
     def checked_count(self) -> int:
-        return sum(1 for _fi, it in self._file_items()
+        return sum(1 for _fi, it in self._visible_file_items()
                    if it.checkState(C_NAME) == Qt.CheckState.Checked)
 
     def set_all_checked(self, state: bool):
         cs = Qt.CheckState.Checked if state else Qt.CheckState.Unchecked
         self._tree.blockSignals(True)
-        for folder, items in self._groups.values():
+        for _key, folder, items in self._visible_groups():
             for _fi, it in items:
                 it.setCheckState(C_NAME, cs)
             if folder is not None:
@@ -372,7 +473,7 @@ class ImageTreePanel(QWidget):
         """
         n_dirs = n_files = 0
         self._tree.blockSignals(True)
-        for folder, items in self._groups.values():
+        for _key, folder, items in self._visible_groups():
             if folder is not None:
                 ok = folder.keys.get(C_PCT, -1e9) >= threshold
                 cs = Qt.CheckState.Checked if ok else Qt.CheckState.Unchecked
@@ -406,7 +507,9 @@ class ImageTreePanel(QWidget):
             return
         self.cancel_estimate(silent=True)
         self._clear_estimates()
-        groups = {k: [fi for fi, _it in items] for k, (_f, items) in self._groups.items()}
+        groups = {k: [fi for fi, _it in items] for k, _f, items in self._visible_groups()}
+        if not groups:
+            return
         self._tot_src = self._tot_est = self._n_done = 0
         self._t0 = time.monotonic()
         self._legend.show()
@@ -605,6 +708,7 @@ class ImageTreePanel(QWidget):
     def apply_theme(self, theme: str):
         self._theme = theme
         style_table(self._tree, theme)
+        self._filter_action.setIcon(icon("search", PALETTE[theme]["muted"], 16))
         for folder, _items in self._groups.values():
             if folder is not None:
                 folder.setIcon(C_NAME, self._folder_icon())

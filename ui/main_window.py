@@ -1406,7 +1406,7 @@ class MainWindow(QMainWindow):
             self._btn_convert.setText(f" Convertir  ({count})")
         else:
             self._btn_convert.setText(" Convertir")
-        total = (self._image_panel.file_count() if self._mode == "image"
+        total = (self._image_panel.file_count(visible_only=True) if self._mode == "image"
                  else self._table.rowCount())
         self._update_select_button(count, total)
         QTimer.singleShot(0, self._align_select_button)
