@@ -2,7 +2,7 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 32
+APP_VERSION = 33
 APP_DATE = "11/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
@@ -195,5 +195,8 @@ DEFAULT_SETTINGS = {
     "image_recent_hours":    48,
     "recent_directories":    [],        # 5 derniers dossiers utilisés
     "gain_select_threshold": 30,        # seuil du bouton « Gain ≥ »
-    "notify_when_done":      True,      # son + notification Windows en fin de tâche
+    "notify_when_done":      True,
+    # JPEG progressif : ~3 % plus léger mais ~2× plus long à encoder (mesuré
+    # sur des photos 21 Mpx) → désactivé par défaut, JPEG standard optimisé
+    "jpeg_progressive":      False,      # son + notification Windows en fin de tâche
 }

@@ -1609,6 +1609,8 @@ class MainWindow(QMainWindow):
         """(format, qualité, côté max, garder si plus léger) du mode Images."""
         fmt = self._combo_out_fmt.currentData()
         quality = self._slider_quality.value() if fmt["quality"] else 100
+        if fmt["pil"] == "JPEG":
+            fmt = dict(fmt, progressive=bool(self._settings.get("jpeg_progressive", False)))
         return fmt, quality, self._combo_max_side.currentData(), self._chk_keep.isChecked()
 
     def _image_options_summary(self) -> str:
@@ -1787,6 +1789,8 @@ class MainWindow(QMainWindow):
         out_fmt = self._combo_out_fmt.currentData()
         if not out_fmt:
             return
+        if image:
+            out_fmt = self._image_options()[0]
 
         # Detect conflicts (mode Images : réglés par les options Renommer / Sous-dossier)
         conflicts = [] if image else detect_conflicts(selected, out_fmt)
@@ -2005,9 +2009,13 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _apply_settings(self, new_settings: dict):
+        progressive_changed = (new_settings.get("jpeg_progressive")
+                               != self._settings.get("jpeg_progressive"))
         self._settings.update(new_settings)
         self._save_settings()
         self._apply_theme()
+        if progressive_changed:
+            self._image_panel.mark_stale()      # estimations faites avec l'autre réglage
 
         # Propagate theme to open log window
         if self._log_window:

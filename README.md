@@ -40,7 +40,7 @@ On a hard drive, reading every header costs one disk seek per file. For folders 
 
 ## Features (Audio mode)
 
-- **Batch conversion** of a whole folder tree, in parallel on all CPU cores — images are encoded in separate worker processes (low priority, so the PC stays responsive), several times faster than a threaded encoder.
+- **Batch conversion** of a whole folder tree, in parallel on all CPU cores — images are encoded in separate worker processes (low priority, so the PC stays responsive), several times faster than a threaded encoder. JPEGs are written as optimized baseline by default (about 2× faster to encode than progressive, ~3 % larger); progressive can be turned on in Settings.
 - **Formats**: FLAC, WAV, APE, OGG, M4A, WMA, AIFF… → MP3, OGG, Opus, and more, with per-format quality settings.
 - **Tags & cover art preserved** through conversion (mutagen + FFmpeg).
 - **Tag editor** with batch editing, filename-pattern deduction (`Artist - Title`…), and **MusicBrainz auto-tagging** (official API, rate-limit friendly).

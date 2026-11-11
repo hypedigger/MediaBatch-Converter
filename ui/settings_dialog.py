@@ -20,7 +20,7 @@ class SettingsDialog(QDialog):
             Qt.WindowType.Dialog
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(460, 350)
+        self.setFixedSize(500, 390)
 
         self._drag_pos = None
         self._build_ui()
@@ -99,6 +99,12 @@ class SettingsDialog(QDialog):
         self._chk_notify.setToolTip("Son seul si l'app est au premier plan ; notification Windows sinon.")
         grid.addWidget(self._chk_notify, 3, 0, 1, 2)
 
+        self._chk_progressive = QCheckBox("JPEG progressif (≈ 3 % plus léger, encodage ≈ 2× plus long)")
+        self._chk_progressive.setToolTip(
+            "Décoché : JPEG standard optimisé, nettement plus rapide.\n"
+            "Coché : JPEG progressif, un peu plus léger et affiché progressivement sur le web.")
+        grid.addWidget(self._chk_progressive, 4, 0, 1, 2)
+
         c_lay.addLayout(grid)
         c_lay.addStretch()
 
@@ -126,6 +132,7 @@ class SettingsDialog(QDialog):
 
         self._combo_theme.setCurrentIndex(0 if theme == "dark" else 1)
         self._chk_notify.setChecked(self._settings.get("notify_when_done", True))
+        self._chk_progressive.setChecked(self._settings.get("jpeg_progressive", False))
 
         for i, opt in enumerate(PARALLEL_OPTIONS):
             if opt["value"] == parallel:
@@ -138,6 +145,7 @@ class SettingsDialog(QDialog):
         self._settings["theme"]    = "dark" if self._combo_theme.currentIndex() == 0 else "light"
         self._settings["parallel"] = self._combo_parallel.currentData()
         self._settings["notify_when_done"] = self._chk_notify.isChecked()
+        self._settings["jpeg_progressive"] = self._chk_progressive.isChecked()
         self.settings_changed.emit(dict(self._settings))
         self.accept()
 

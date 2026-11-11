@@ -100,10 +100,14 @@ def _prepare(img: Image.Image, pil_fmt: str, max_side: int) -> Tuple[Image.Image
     return img, icc_ok
 
 
-def _save_kwargs(pil_fmt: str, quality: int, meta: Dict[str, Any]) -> Dict[str, Any]:
+def _save_kwargs(pil_fmt: str, quality: int, meta: Dict[str, Any],
+                 progressive: bool = False) -> Dict[str, Any]:
     kw: Dict[str, Any] = {}
     if pil_fmt == "JPEG":
-        kw.update(quality=quality, optimize=True, progressive=True,
+        # optimize = tables de Huffman calculées pour l'image (~8 % plus léger
+        # qu'un JPEG standard, coût modéré) ; progressive = encore ~3 % de
+        # moins mais encodage ~2× plus long
+        kw.update(quality=quality, optimize=True, progressive=progressive,
                   # 4:4:4 en haute qualité (texte, aplats colorés nets)
                   subsampling=0 if quality >= 90 else 2)
     elif pil_fmt == "WEBP":
@@ -147,7 +151,8 @@ def encode_image(path: str, out_fmt: Dict[str, Any], quality: int,
         if not icc_ok:
             meta["icc_profile"] = None
         buf = io.BytesIO()
-        img.save(buf, format=pil_fmt, **_save_kwargs(pil_fmt, quality, meta))
+        img.save(buf, format=pil_fmt, **_save_kwargs(pil_fmt, quality, meta,
+                                                      bool(out_fmt.get("progressive"))))
     return buf.getvalue()
 
 
