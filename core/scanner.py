@@ -1,6 +1,9 @@
 import os
+import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
+
+from PyQt6.QtCore import QThread, pyqtSignal
 
 # Directories to skip entirely during recursive scan
 _EXCLUDED_DIRS = {".stversions"}
@@ -40,15 +43,24 @@ def file_info_from_path(path: str) -> Optional[FileInfo]:
     )
 
 
-def scan_directory(root: str, extensions: List[str], recursive: bool = True) -> List[FileInfo]:
+def scan_directory(root: str, extensions: List[str], recursive: bool = True,
+                   progress: Optional[Callable[[int, str], None]] = None,
+                   cancelled: Optional[Callable[[], bool]] = None) -> List[FileInfo]:
     """
     Scan *root* (recursively by default) and return FileInfo for every file
     whose extension (lowercase, no dot) is in *extensions*.
+    *progress(n_trouvés, dossier)* est appelé au plus ~10 fois par seconde.
     """
     exts = {e.lower().lstrip(".") for e in extensions}
     results: List[FileInfo] = []
+    last = 0.0
 
     for dirpath, dirs, files in os.walk(root):
+        if cancelled and cancelled():
+            break
+        if progress and time.monotonic() - last > 0.1:
+            last = time.monotonic()
+            progress(len(results), dirpath)
         # Prune excluded directories in-place so os.walk won't descend into them
         dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS] if recursive else []
         for filename in files:
@@ -70,3 +82,24 @@ def scan_directory(root: str, extensions: List[str], recursive: bool = True) -> 
                 continue
 
     return results
+
+
+class ScanThread(QThread):
+    """Scan en arrière-plan : l'interface reste fluide pendant le chargement."""
+    progress = pyqtSignal(int, str)        # fichiers trouvés, dossier en cours
+    done     = pyqtSignal(object)          # List[FileInfo]
+
+    def __init__(self, root: str, extensions: List[str]):
+        super().__init__()
+        self._root, self._exts = root, extensions
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        files = scan_directory(self._root, self._exts,
+                               progress=lambda n, d: self.progress.emit(n, d),
+                               cancelled=lambda: self._cancelled)
+        if not self._cancelled:
+            self.done.emit(files)

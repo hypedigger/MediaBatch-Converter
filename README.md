@@ -76,10 +76,12 @@ Build the standalone exe yourself with `powershell -File build_exe.ps1` (output:
 
 ## Usage
 
-1. Pick **Audio** or **Images** in the title bar. The app opens on a **start screen**: choose a folder with *Browse*, drop it on the window, or reopen one of your **5 recent folders** (the list can be cleared). Only then does the file list appear — *Home* brings you back. The ↻ button next to the format filters re-reads the folder; it blinks when the ticked formats no longer match the list.
+1. Pick **Audio** or **Images** in the title bar. The app opens on a **start screen**: choose a folder with *Browse*, drop it on the window, or reopen one of your **5 recent folders** (the list can be cleared). Only then does the file list appear (folders are read in the background, with a loading animation — the previous list is cleared at once) — *Home* brings you back. The ↻ button next to the format filters re-reads the folder; it blinks when the ticked formats no longer match the list.
 2. Pick the output format and quality (Images: check the size estimate, or click **Estimate space savings** first).
-3. Convert. Covers and tags (audio) or EXIF (images) follow automatically. The list and settings are locked while converting. Ticking *Send originals to the Recycle Bin* moves the converted originals to the Windows Recycle Bin at the end (recoverable — never a permanent delete). A summary shows the space saved, before/after sizes, converted / kept / failed counts and any errors.
+3. Convert. Covers and tags (audio) or EXIF (images) follow automatically. While converting, the list is veiled and locked, and a progress card shows the percentage, the folder being converted, elapsed and estimated remaining time and the space saved so far (with a Cancel button). Ticking *Send originals to the Recycle Bin* moves the converted originals to the Windows Recycle Bin at the end (recoverable — never a permanent delete). A summary shows the space saved, before/after sizes, converted / kept / failed counts and any errors.
 4. When an estimate or a conversion finishes, the app plays a sound — or, if you've switched to another window, shows a Windows notification (click it to come back). Can be turned off in Settings.
+
+![Conversion in progress](docs/screenshot-converting.png)
 
 ![Conversion summary](docs/screenshot-summary.png)
 5. Optional (audio): open the tag editor to fix metadata, or let MusicBrainz fill the gaps.

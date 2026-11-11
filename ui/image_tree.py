@@ -275,7 +275,10 @@ class ImageTreePanel(QWidget):
             folder = None
             if not loose:
                 folder = _Item()
-                rel = os.path.relpath(directory, self._root) if self._root else directory
+                try:
+                    rel = os.path.relpath(directory, self._root) if self._root else directory
+                except ValueError:              # autre lecteur
+                    rel = directory
                 folder.set(C_NAME, rel if not rel.startswith("..") else directory)
                 folder.setIcon(C_NAME, self._folder_icon())
                 folder.setToolTip(C_NAME, directory)

@@ -71,6 +71,7 @@ class ConversionThread(QThread):
 
     progress_updated = pyqtSignal(int, int)             # completed, total
     file_completed   = pyqtSignal(str, str, bool, str)  # src_path, out_path, success, message
+    file_started     = pyqtSignal(str)                  # src_path (émis depuis un worker)
     all_done         = pyqtSignal()
 
     def __init__(
@@ -105,7 +106,7 @@ class ConversionThread(QThread):
 
         with ThreadPoolExecutor(max_workers=self._parallel) as pool:
             futures = {
-                pool.submit(self._convert_one, f): f
+                pool.submit(self._run_one, f): f
                 for f in self._files
             }
             for future in as_completed(futures):
@@ -136,6 +137,11 @@ class ConversionThread(QThread):
         log_app.info("Conversion terminée.")
 
     # ── Private ──────────────────────────────────────────────────────────────
+
+    def _run_one(self, fi: FileInfo):
+        if not self._cancelled:
+            self.file_started.emit(fi.path)     # → interface (connexion en file d'attente)
+        return self._convert_one(fi)
 
     def _build_cmd(self, src: str, dst: str, with_cover: bool) -> List[str]:
         cmd = [self._ffmpeg_path, "-y", "-i", src, "-map_metadata", "0"]

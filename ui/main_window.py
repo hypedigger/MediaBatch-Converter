@@ -38,6 +38,8 @@ from ui.icons       import icon, PALETTE
 from ui.home_screen import HomeScreen
 from ui.summary_dialog import SummaryDialog
 from ui.notify      import Notifier
+from ui.progress_overlay import ConversionOverlay, ScanOverlay
+from core.scanner   import ScanThread
 from core.recycle   import send_to_recycle_bin
 
 # Formats d'entrée par mode : nom affiché → liste d'extensions
@@ -369,6 +371,12 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(self._make_top_panel())
         lay.addWidget(self._make_list_panel(), 1)
+        # Pendant une conversion : voile sur la liste + avancement détaillé
+        self._conv_overlay = ConversionOverlay(self._list_panel, self._settings.get("theme", "dark"))
+        self._conv_overlay.cancel_requested.connect(self._cancel_conversion)
+        self._scan_overlay = ScanOverlay(self._list_panel, self._settings.get("theme", "dark"))
+        self._scan_thread = None
+        self._scan_token = 0
 
         self._preview = PreviewPlayer()
         self._preview.stopped.connect(self._on_preview_stopped)
@@ -883,8 +891,7 @@ class MainWindow(QMainWindow):
         self._settings["last_directory"] = path
         self._save_settings()
         self._show_work()
-        self._scan_directory()
-        self._suggest_estimate(path)
+        self._scan_directory(then=lambda: self._suggest_estimate(path))
 
     @property
     def _format_checks(self) -> dict:
@@ -901,7 +908,8 @@ class MainWindow(QMainWindow):
         for cb in self._format_checks.values():
             cb.setChecked(state)
 
-    def _scan_directory(self):
+    def _scan_directory(self, *_args, then=None):
+        """Lit le dossier en arrière-plan ; l'ancienne liste disparaît aussitôt."""
         path = self._dir_edit.text().strip()
         if not path or not os.path.isdir(path):
             self._set_status("Veuillez sélectionner un répertoire valide.")
@@ -913,7 +921,44 @@ class MainWindow(QMainWindow):
             return
 
         self._set_status("Scan en cours…")
-        self._files = scan_directory(path, selected_fmts)
+        # Un scan précédent encore en cours n'a plus d'intérêt
+        if self._scan_thread and self._scan_thread.isRunning():
+            self._scan_thread.cancel()
+        self._scan_token += 1
+        token = self._scan_token
+        self._image_panel.cancel_estimate(silent=True)
+        self._files = []
+        self._refresh_list()                # l'ancien contenu disparaît tout de suite
+        self._lbl_count.setText("Chargement…")
+        self._scan_overlay.start(path, "images trouvées" if self._mode == "image"
+                                 else "fichiers trouvés")
+        th = ScanThread(path, selected_fmts)
+        th.ctx = (token, path, selected_fmts, then)
+        # Méthodes de la fenêtre (pas de lambda) : exécutées dans le thread de
+        # l'interface, en file d'attente
+        th.progress.connect(self._on_scan_progress)
+        th.done.connect(self._on_scan_done)
+        if self._scan_thread is not None:
+            self._old_scans = [t for t in getattr(self, "_old_scans", []) if t.isRunning()]
+            self._old_scans.append(self._scan_thread)   # garder en vie jusqu'à sa fin
+        self._scan_thread = th
+        th.start()
+
+    def _on_scan_progress(self, n: int, directory: str):
+        th = self.sender()
+        if th is self._scan_thread:
+            self._scan_overlay.set_progress(n, directory)
+
+    def _on_scan_done(self, files):
+        th = self.sender()
+        if th is not self._scan_thread:
+            return                          # résultat d'un dossier abandonné entre-temps
+        token, path, selected_fmts, then = th.ctx
+        self._finish_scan(path, selected_fmts, files, then)
+
+    def _finish_scan(self, path, selected_fmts, files, then=None):
+        self._scan_overlay.stop()
+        self._files = files
         self._scanned_exts = set(selected_fmts)
         # Sous-dossiers de sortie (« Reduced ») écartés : on ne reconvertit pas
         # les images déjà converties
@@ -932,6 +977,8 @@ class MainWindow(QMainWindow):
         n = len(self._files)
         self._set_status(f"{n} fichier(s) trouvé(s) dans {path}")
         get_app_logger().info("Scan: %d fichiers dans %s", n, path)
+        if callable(then):
+            then()
 
     def _populate_table(self):
         self._table.setSortingEnabled(False)
@@ -1603,8 +1650,10 @@ class MainWindow(QMainWindow):
         self._toast.dismiss()       # lancée depuis le bouton du haut : la suggestion est caduque
         # Rien d'affiché : on charge d'abord le dossier choisi
         if not self._image_panel.file_count():
-            self._scan_directory()
-        if not self._image_panel.file_count():
+            if self._scan_thread and self._scan_thread.isRunning():
+                return                      # chargement en cours : rien à estimer encore
+            self._scan_directory(then=lambda: self._image_panel.file_count()
+                                 and self._start_estimate())
             return
         fmt, quality, max_side, keep = self._image_options()
         parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
@@ -1686,8 +1735,7 @@ class MainWindow(QMainWindow):
         delete   = self._chk_delete.isChecked()
         self._set_busy(True)
 
-        # Setup UI
-        self._progress_row.show()
+        # Setup UI (l'avancement s'affiche dans le panneau posé sur la liste)
         self._btn_convert.hide()
         self._btn_cancel_conv.show()
         self._progress_bar.setValue(0)
@@ -1737,6 +1785,10 @@ class MainWindow(QMainWindow):
             )
         self._thread.progress_updated.connect(self._on_progress)
         self._thread.file_completed.connect(self._on_file_done)
+        self._thread.file_started.connect(self._conv_overlay.file_started)
+        self._conv_overlay.start([(f.path, f.size) for f in selected],
+                                 self._dir_edit.text().strip(),
+                                 self._conv_summary["fmt_label"])
         self._thread.all_done.connect(self._on_all_done)
         self._thread.start()
 
@@ -1744,6 +1796,7 @@ class MainWindow(QMainWindow):
         if self._thread:
             self._thread.cancel()
             self._conv_summary["cancelled"] = True
+            self._conv_overlay.set_cancelling()
             self._set_status("Annulation en cours…")
 
     def _on_progress(self, completed: int, total: int):
@@ -1754,6 +1807,10 @@ class MainWindow(QMainWindow):
     def _on_file_done(self, src_path: str, out_path: str, success: bool, msg: str):
         s = self._conv_summary
         size = self._conv_sizes.get(src_path, 0)
+        saved = 0
+        if success and msg != SKIPPED and out_path and os.path.exists(out_path):
+            saved = size - os.path.getsize(out_path)
+        self._conv_overlay.file_done(src_path, success, saved)
         if success and msg == SKIPPED:
             s["skipped"].append(src_path)
             s["src_size"] += size
@@ -1781,6 +1838,7 @@ class MainWindow(QMainWindow):
         if s["delete_source"] and s["to_recycle"]:
             n = len(s["to_recycle"])
             self._lbl_progress.setText(f"Envoi de {n} original(aux) à la corbeille…")
+            self._conv_overlay.set_phase(f"Envoi de {n} original(aux) à la corbeille…")
             self._set_status("Envoi des originaux à la corbeille…")
             QApplication.processEvents()
             if send_to_recycle_bin(s["to_recycle"]):
@@ -1805,6 +1863,7 @@ class MainWindow(QMainWindow):
                          else f" — {fmt_bytes(-diff)} de plus")
             self._notify_done("Conversion terminée" if not s["failed"]
                               else "Conversion terminée avec des erreurs", text)
+        self._conv_overlay.finish()
         dlg = SummaryDialog(s, dark=self._settings.get("theme", "dark") == "dark", parent=self)
         dlg.exec()
         # Des originaux ont pu partir à la Corbeille, des fichiers sont apparus : relire
@@ -1885,6 +1944,9 @@ class MainWindow(QMainWindow):
             self._home.set_theme(theme)
         if hasattr(self, "_image_panel"):
             self._image_panel.apply_theme(theme)
+        if hasattr(self, "_conv_overlay"):
+            self._conv_overlay.set_theme(theme)
+            self._scan_overlay.set_theme(theme)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -2043,6 +2105,10 @@ class MainWindow(QMainWindow):
             self._estimate_thread.cancel()
             self._estimate_thread.wait(3000)
         self._image_panel.cancel_estimate(silent=True)
+        for th in [self._scan_thread, *getattr(self, "_old_scans", [])]:
+            if th is not None and th.isRunning():
+                th.cancel()
+                th.wait(3000)
         if self._log_window:
             self._log_window.close()
         super().closeEvent(event)
