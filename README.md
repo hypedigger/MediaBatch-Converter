@@ -26,7 +26,8 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
 - **Folder view**: images are grouped by folder, folders start collapsed (images sitting directly in the chosen folder are listed on their own). Tick a folder to select all its images.
 - **Estimate space savings** (teal button): fills the *Estimated / Gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time; click again to stop.
-- When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds.
+- **≥ 30 %** button (next to the select-all box): once the estimate is done, ticks every folder whose estimated gain is 30 % or more and unticks the rest — convert only where it's worth it.
+- When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds (it also disappears as soon as you start the estimate from the main button).
 
 ![Space-savings estimate in the folder view](docs/screenshot-estimate.png)
 

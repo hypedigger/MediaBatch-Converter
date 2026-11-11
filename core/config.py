@@ -2,8 +2,8 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 27
-APP_DATE = "10/11/2026"
+APP_VERSION = 28
+APP_DATE = "11/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
 if getattr(sys, "frozen", False):

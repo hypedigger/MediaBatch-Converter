@@ -110,6 +110,9 @@ class _FileTable(QTableWidget):
 
 # ── Conflict dialog ───────────────────────────────────────────────────────────
 
+GAIN_SELECT_THRESHOLD = 30      # % de gain pour le bouton « ≥ 30 % »
+
+
 class _ConflictDialog(QDialog):
     def __init__(self, conflicts: List[FileInfo], out_ext: str, parent=None):
         super().__init__(parent)
@@ -513,12 +516,28 @@ class MainWindow(QMainWindow):
         tool_row.addWidget(self._btn_select)
         self._sel_count, self._sel_total = 0, 0
         self._update_select_button(0, 0)
+
+        # Mode Images : cocher les dossiers où l'estimation promet ≥ 30 % de gain
+        self._btn_select_gain = QPushButton(f" ≥ {GAIN_SELECT_THRESHOLD} %")
+        self._btn_select_gain.setObjectName("btn_tool")
+        self._btn_select_gain.setFixedHeight(28)
+        self._btn_select_gain.clicked.connect(self._select_by_gain)
+        tool_row.addWidget(self._btn_select_gain)
         tool_row.addSpacing(10)
 
         self._lbl_count = QLabel("Aucun fichier — glissez un dossier ici")
         self._lbl_count.setObjectName("label_count")
         tool_row.addWidget(self._lbl_count)
-        tool_row.addStretch()
+        tool_row.addStretch(1)
+        # Emplacement de la ligne d'activité (mode Images) quand elle tient ici,
+        # centrée entre le compteur et la légende ; sinon elle reste sous la ligne
+        self._act_slot = QHBoxLayout()
+        self._act_slot.setSpacing(12)
+        tool_row.addLayout(self._act_slot)
+        tool_row.addStretch(1)
+        self._legend_slot = QHBoxLayout()
+        tool_row.addLayout(self._legend_slot)
+        self._tool_row = tool_row
         lay.addLayout(tool_row)
 
         # Table
@@ -565,6 +584,8 @@ class MainWindow(QMainWindow):
         self._image_panel = ImageTreePanel(self._settings.get("theme", "dark"))
         self._image_panel.selection_changed.connect(self._update_convert_btn)
         self._image_panel.running_changed.connect(self._on_estimate_running)
+        self._image_panel.activity_changed.connect(self._schedule_place_activity)
+        self._update_gain_button()
 
         self._list_stack = QStackedWidget()
         self._list_stack.addWidget(self._table)
@@ -679,6 +700,9 @@ class MainWindow(QMainWindow):
         io_lay.addStretch()
         self._lbl_estimate = QLabel()
         self._lbl_estimate.setObjectName("label_count")
+        # Prend la place restante sans jamais tasser les options à sa gauche
+        self._lbl_estimate.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._lbl_estimate.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._lbl_estimate.setToolTip(
             "Estimation : une partie de la sélection est convertie en mémoire\n"
             "et le résultat extrapolé à l'ensemble des fichiers."
@@ -1278,7 +1302,66 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_list_panel", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._align_select_button)
+            self._schedule_place_activity()
         return super().eventFilter(obj, event)
+
+    # ── Ligne d'activité : sur la ligne des cases si elle y tient ──────────────
+
+    def _schedule_place_activity(self):
+        if not hasattr(self, "_act_timer"):
+            self._act_timer = QTimer(self)
+            self._act_timer.setSingleShot(True)
+            self._act_timer.setInterval(0)
+            self._act_timer.timeout.connect(self._place_activity)
+        self._act_timer.start()
+
+    def _place_activity(self):
+        self._update_gain_button()
+        P = self._image_panel
+        act, legend = P.activity, P.legend
+        left = (self._sel_spacer.width() + self._btn_select.width()
+                + (self._btn_select_gain.sizeHint().width() if self._btn_select_gain.isVisible() else 0)
+                + self._lbl_count.sizeHint().width() + 6 * 3 + 10)
+        need = act.sizeHint().width() + 2 * 24
+        if legend.isVisible() or legend.parent() is not P.act_row:
+            need += legend.sizeHint().width() + 12
+        avail = self._list_panel.width() - 24 - left
+        up = self._mode == "image" and need <= avail
+        if up and act.parent() is P.act_row:
+            P.act_layout.removeWidget(act)
+            P.act_layout.removeWidget(legend)
+            self._act_slot.addWidget(act)
+            self._legend_slot.addWidget(legend)
+        elif not up and act.parent() is not P.act_row:
+            self._act_slot.removeWidget(act)
+            self._legend_slot.removeWidget(legend)
+            P.act_layout.insertWidget(0, act, 1)
+            P.act_layout.addWidget(legend)
+        P.act_row.setVisible(act.parent() is P.act_row)
+        # Centrée sur la ligne des cases, alignée à gauche sous celle-ci
+        P._lbl_activity.setAlignment(
+            (Qt.AlignmentFlag.AlignCenter if up else Qt.AlignmentFlag.AlignLeft)
+            | Qt.AlignmentFlag.AlignVCenter)
+        act.setVisible(bool(P._lbl_activity.text()))
+
+    # ── Sélection par gain estimé ─────────────────────────────────────────────
+
+    def _update_gain_button(self):
+        image = self._mode == "image"
+        has = image and self._image_panel.has_estimates()
+        self._btn_select_gain.setVisible(image)
+        self._btn_select_gain.setEnabled(has)
+        self._btn_select_gain.setToolTip(
+            f"Coche les dossiers dont le gain estimé atteint {GAIN_SELECT_THRESHOLD} % ou plus\n"
+            "(les autres sont décochés)." if has else
+            f"Sélectionner les dossiers à {GAIN_SELECT_THRESHOLD} % de gain ou plus :\n"
+            "lancez d'abord « Estimer le gain d'espace ».")
+
+    def _select_by_gain(self):
+        n_dirs, n_files = self._image_panel.select_by_gain(GAIN_SELECT_THRESHOLD)
+        self._set_status(
+            f"{n_dirs} dossier(s) à {GAIN_SELECT_THRESHOLD} % de gain ou plus sélectionné(s) "
+            f"— {n_files} image(s).")
 
     def _toggle_select_all(self):
         # Tout coché → tout décocher ; sinon (rien ou une partie) → tout cocher
@@ -1339,6 +1422,8 @@ class MainWindow(QMainWindow):
         if not image:
             self._toast.dismiss()
         self._img_opts_row.setVisible(image)
+        if hasattr(self, "_btn_select_gain"):
+            self._schedule_place_activity()
         self._lbl_estimate.clear()
         # Pré-écoute et tags n'ont de sens qu'en audio
         self._table.setColumnHidden(COL_PLAY, image)
@@ -1479,6 +1564,7 @@ class MainWindow(QMainWindow):
             self._start_estimate()
 
     def _start_estimate(self):
+        self._toast.dismiss()       # lancée depuis le bouton du haut : la suggestion est caduque
         # Rien d'affiché : on charge d'abord le dossier choisi
         if not self._image_panel.file_count():
             self._scan_directory()
@@ -1489,6 +1575,7 @@ class MainWindow(QMainWindow):
         self._image_panel.start_estimate(fmt, quality, max_side, keep, parallel)
 
     def _on_estimate_running(self, running: bool):
+        self._update_gain_button()
         self._btn_analyze.setText(" Arrêter l'estimation" if running
                                   else " Estimer le gain d'espace")
         self._set_icon(self._btn_analyze, "stop" if running else "estimate", "on_accent",

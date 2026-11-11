@@ -171,6 +171,7 @@ class _Spinner(QWidget):
 class ImageTreePanel(QWidget):
     selection_changed = pyqtSignal()
     running_changed   = pyqtSignal(bool)      # estimation en cours / terminée
+    activity_changed  = pyqtSignal()          # texte d'activité / légende modifiés
 
     def __init__(self, theme: str = "dark", parent=None):
         super().__init__(parent)
@@ -186,15 +187,24 @@ class ImageTreePanel(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        # Ligne d'activité : ce qui se passe, ou ce qu'on peut faire
-        act = QHBoxLayout()
+        # Ligne d'activité : ce qui se passe, ou ce qu'on peut faire. La fenêtre
+        # principale peut remonter « activity » et « legend » sur la ligne des
+        # cases à cocher quand la place le permet (voir act_row / act_layout)
+        self.act_row = QWidget()
+        act = QHBoxLayout(self.act_row)
+        self.act_layout = act
         act.setContentsMargins(4, 0, 4, 0)
         act.setSpacing(8)
+        self.activity = QWidget()
+        al = QHBoxLayout(self.activity)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(8)
         self._spinner = _Spinner()
-        act.addWidget(self._spinner)
+        al.addWidget(self._spinner)
         self._lbl_activity = QLabel()
         self._lbl_activity.setObjectName("label_activity")
-        act.addWidget(self._lbl_activity, 1)
+        al.addWidget(self._lbl_activity, 1)
+        act.addWidget(self.activity, 1)
         self._legend = QLabel("&nbsp;&nbsp;".join(
             f'<span style="color:{c}">●</span> {"&lt; 15" if t < 0 else f"≥ {t}"} %'
             for t, c, _lbl in GAIN_LEVELS))
@@ -203,7 +213,8 @@ class ImageTreePanel(QWidget):
         self._legend.setObjectName("label_desc")
         self._legend.hide()
         act.addWidget(self._legend)
-        lay.addLayout(act)
+        self.legend = self._legend
+        lay.addWidget(self.act_row)
 
         self._tree = _Tree()
         self._tree.setColumnCount(len(_HEADERS))
@@ -337,6 +348,37 @@ class ImageTreePanel(QWidget):
         self._tree.viewport().update()
         self.selection_changed.emit()
 
+    def has_estimates(self) -> bool:
+        return any(C_PCT in it.keys for _fi, it in self._file_items())
+
+    def select_by_gain(self, threshold: float) -> Tuple[int, int]:
+        """
+        Coche les dossiers dont le gain estimé atteint *threshold* % (les images
+        isolées à la racine : chacune selon son propre gain), décoche le reste.
+        Retourne (dossiers retenus, images cochées).
+        """
+        n_dirs = n_files = 0
+        self._tree.blockSignals(True)
+        for folder, items in self._groups.values():
+            if folder is not None:
+                ok = folder.keys.get(C_PCT, -1e9) >= threshold
+                cs = Qt.CheckState.Checked if ok else Qt.CheckState.Unchecked
+                folder.setCheckState(C_NAME, cs)
+                for _fi, it in items:
+                    it.setCheckState(C_NAME, cs)
+                if ok:
+                    n_dirs += 1
+                    n_files += len(items)
+            else:
+                for _fi, it in items:
+                    ok = it.keys.get(C_PCT, -1e9) >= threshold
+                    it.setCheckState(C_NAME, Qt.CheckState.Checked if ok else Qt.CheckState.Unchecked)
+                    n_files += ok
+        self._tree.blockSignals(False)
+        self._tree.viewport().update()
+        self.selection_changed.emit()
+        return n_dirs, n_files
+
     def _on_item_changed(self, _item, column):
         if column == C_NAME:
             self._sel_timer.start()
@@ -355,6 +397,7 @@ class ImageTreePanel(QWidget):
         self._tot_src = self._tot_est = self._n_done = 0
         self._t0 = time.monotonic()
         self._legend.show()
+        self.activity_changed.emit()
         self._thread = GroupEstimateThread(groups, out_fmt, quality, max_side, keep, parallel)
         self._thread.group_done.connect(self._on_group_done)
         self._thread.all_done.connect(lambda: self._on_done(stopped=False))
@@ -387,7 +430,7 @@ class ImageTreePanel(QWidget):
         if any(it.text(C_EST) for _fi, it in self._file_items()):
             self._clear_estimates()
             self._spinner.set_state("idle")
-            self._lbl_activity.setText(
+            self._set_activity(
                 "Réglages modifiés : cliquez sur « Estimer le gain d'espace » pour mettre à jour "
                 "les colonnes Estimé / Gain.")
 
@@ -448,9 +491,9 @@ class ImageTreePanel(QWidget):
         gain = self._tot_src - self._tot_est
         pct = (gain / self._tot_src * 100) if self._tot_src else 0
         self._spinner.set_state("stopped" if stopped else "done")
-        verb = "Arrêté après" if stopped else "Terminé en"
+        verb = "Analyse arrêtée après" if stopped else "Analyse terminée en"
         color = gain_color(pct).name()
-        self._lbl_activity.setText(
+        self._set_activity(
             f"{verb} {_duration(time.monotonic() - self._t0)}  —  "
             f"{fmt_bytes(self._tot_src)} → ≈ {fmt_bytes(self._tot_est)}  "
             f"<b style='color:{color}'>gain ≈ {fmt_bytes(gain)} ({pct:.0f} %)</b>  "
@@ -479,17 +522,21 @@ class ImageTreePanel(QWidget):
             names = ", ".join(_short(d) for d in cur[:2])
             more = f" (+{len(cur) - 2})" if len(cur) > 2 else ""
             text += f"   ·   en cours : {names}{more}"
-        self._lbl_activity.setText(text[0].upper() + text[1:])
+        self._set_activity(text[0].upper() + text[1:])
+
+    def _set_activity(self, text: str):
+        self._lbl_activity.setText(text)
+        self.activity_changed.emit()
 
     def _set_hint(self):
         self._spinner.set_state("idle")
         self._legend.hide()
         if self._groups:
-            self._lbl_activity.setText(
+            self._set_activity(
                 "Cliquez sur « Estimer le gain d'espace » pour calculer la taille après "
                 "conversion de chaque dossier et de chaque image — sans rien modifier.")
         else:
-            self._lbl_activity.setText("")
+            self._set_activity("")
 
     # ── Menu contextuel ───────────────────────────────────────────────────────
 
