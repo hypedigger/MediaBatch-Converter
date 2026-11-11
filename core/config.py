@@ -2,7 +2,7 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 31
+APP_VERSION = 32
 APP_DATE = "11/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
@@ -113,9 +113,11 @@ OUTPUT_FORMATS = [
 ]
 
 PARALLEL_OPTIONS = [
-    {"label": "4 conversions simultanées",        "value": 4},
+    {"label": f"Automatique — tous les cœurs ({max(1, (os.cpu_count() or 4) - 1)})",
+     "value": 0},
+    {"label": "16 conversions simultanées",       "value": 16},
     {"label": "8 conversions simultanées",        "value": 8},
-    {"label": "Automatique (selon charge CPU)",   "value": 0},
+    {"label": "4 conversions simultanées",        "value": 4},
 ]
 
 # ── Mode Images ──────────────────────────────────────────────────────────────
@@ -175,7 +177,7 @@ IMAGE_RESIZE_OPTIONS = [0, 4096, 3840, 2560, 2048, 1920, 1600, 1280, 1024]
 
 DEFAULT_SETTINGS = {
     "theme":             "dark",
-    "parallel":          8,
+    "parallel":          0,             # 0 = tous les cœurs sauf un
     "last_directory":    "",
     "selected_formats":  list(SUPPORTED_INPUT_FORMATS.keys()),
     "default_output_format": "mp3_320",
@@ -189,6 +191,8 @@ DEFAULT_SETTINGS = {
     "image_rename_suffix":   "_v2",
     "image_use_subdir":      False,
     "image_subdir":          "Reduced",
+    "image_skip_recent":     False,     # ignorer les images créées récemment
+    "image_recent_hours":    48,
     "recent_directories":    [],        # 5 derniers dossiers utilisés
     "gain_select_threshold": 30,        # seuil du bouton « Gain ≥ »
     "notify_when_done":      True,      # son + notification Windows en fin de tâche

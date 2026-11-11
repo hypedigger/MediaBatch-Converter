@@ -1,5 +1,5 @@
 """
-MediaBatch Converter — v26 — 10/11/2026
+MediaBatch Converter
 """
 
 import sys
@@ -208,6 +208,25 @@ def main():
 
 
 if __name__ == "__main__":
+    # Processus d'encodage des images (core/proc_pool.py) : dans l'exe, chaque
+    # processus enfant relance l'exe, qui doit s'arrêter ici
+    import multiprocessing
+    multiprocessing.freeze_support()
+    if "--selftest-pool" in sys.argv:
+        # Vérifie que l'encodage en processus séparés fonctionne (exe compris) :
+        # code de sortie 0 si OK
+        import tempfile
+        from PIL import Image
+        from core import proc_pool
+        from core.config import IMAGE_OUTPUT_FORMATS
+        p = os.path.join(tempfile.gettempdir(), "mediabatch_selftest.png")
+        Image.new("RGB", (64, 64), (200, 30, 90)).save(p)
+        try:
+            n = proc_pool.size(p, IMAGE_OUTPUT_FORMATS[0], 85, 0)
+        finally:
+            proc_pool.shutdown()
+            os.remove(p)
+        sys.exit(0 if n > 0 else 1)
     try:
         main()
     except SystemExit:

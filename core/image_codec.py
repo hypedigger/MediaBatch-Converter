@@ -149,3 +149,9 @@ def encode_image(path: str, out_fmt: Dict[str, Any], quality: int,
         buf = io.BytesIO()
         img.save(buf, format=pil_fmt, **_save_kwargs(pil_fmt, quality, meta))
     return buf.getvalue()
+
+
+def encoded_size(path: str, out_fmt: Dict[str, Any], quality: int,
+                 max_side: int = 0) -> int:
+    """Poids du fichier produit (estimation : seule la taille revient du processus)."""
+    return len(encode_image(path, out_fmt, quality, max_side))

@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Tuple
 
 from core.scanner      import FileInfo
 from core.converter    import ConversionThread, get_output_path
-from core.image_codec  import encode_image
+from core               import proc_pool
 from core.recycle      import send_to_recycle_bin
 
 # Message renvoyé quand l'original est conservé (résultat plus lourd)
@@ -13,6 +13,34 @@ SKIPPED = "skipped"
 REPLACED = "replaced"
 
 _recycle_lock = threading.Lock()
+
+
+def _set_created_now(path: str):
+    """
+    Date de création = maintenant (Windows). La date de modification reste celle
+    de la photo, mais la date de création marque la conversion : l'option
+    « Ignorer les images créées il y a moins de N h » s'appuie dessus. Sans cela,
+    l'effet « tunnel » de NTFS redonne à un fichier remplacé sous le même nom la
+    date de création de l'original.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.CreateFileW.restype = wintypes.HANDLE
+        h = k32.CreateFileW(path, 0x0100, 0x7, None, 3, 0x02000000, None)  # FILE_WRITE_ATTRIBUTES
+        if h in (None, wintypes.HANDLE(-1).value):
+            return
+        try:
+            now = wintypes.FILETIME()
+            k32.GetSystemTimeAsFileTime(ctypes.byref(now))
+            k32.SetFileTime(h, ctypes.byref(now), None, None)
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        pass
 
 
 class ImageConversionThread(ConversionThread):
@@ -31,7 +59,7 @@ class ImageConversionThread(ConversionThread):
         subdir:         str  = "",
         recycle_replaced: bool = False,
     ):
-        super().__init__(files, "", out_fmt, parallel, conflict)
+        super().__init__(files, "", out_fmt, proc_pool.worker_count(parallel), conflict)
         self._quality          = quality
         self._max_side         = max_side
         self._keep_if_larger   = keep_if_larger
@@ -39,11 +67,20 @@ class ImageConversionThread(ConversionThread):
         self._subdir           = subdir
         self._recycle_replaced = recycle_replaced
 
+    def run(self):
+        # Encodages dans des processus séparés (voir core/proc_pool.py) :
+        # les threads du pool ne font qu'attendre et écrire les fichiers
+        proc_pool.acquire(self._parallel)
+        try:
+            super().run()
+        finally:
+            proc_pool.release()
+
     def _convert_one(self, fi: FileInfo) -> Tuple[str, str]:
         if self._cancelled:
             raise RuntimeError("Annulé")
 
-        data = encode_image(fi.path, self._out_fmt, self._quality, self._max_side)
+        data = proc_pool.encode(fi.path, self._out_fmt, self._quality, self._max_side)
 
         if self._keep_if_larger and len(data) >= fi.size:
             # Rien à gagner : l'original reste en place, intact
@@ -75,4 +112,5 @@ class ImageConversionThread(ConversionThread):
         os.replace(tmp, dst)
         # Conserver la date de modification (tri chronologique des photos)
         os.utime(dst, (st.st_atime, st.st_mtime))
+        _set_created_now(dst)
         return dst, msg

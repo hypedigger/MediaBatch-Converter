@@ -122,7 +122,7 @@ class SettingsDialog(QDialog):
 
     def _load_values(self):
         theme    = self._settings.get("theme", "dark")
-        parallel = self._settings.get("parallel", 8)
+        parallel = self._settings.get("parallel", 0)
 
         self._combo_theme.setCurrentIndex(0 if theme == "dark" else 1)
         self._chk_notify.setChecked(self._settings.get("notify_when_done", True))

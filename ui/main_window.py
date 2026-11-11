@@ -476,6 +476,9 @@ class MainWindow(QMainWindow):
             btn_refresh.clicked.connect(self._scan_directory)
             self._refresh_buttons.append(btn_refresh)
             fmt_lay.addWidget(btn_refresh)
+            if mode == "image":
+                fmt_lay.addSpacing(14)
+                fmt_lay.addWidget(self._make_recent_filter())
             for cb in checks.values():
                 cb.toggled.connect(self._on_formats_changed)
             fmt_lay.addStretch()
@@ -610,6 +613,7 @@ class MainWindow(QMainWindow):
 
         # Mode Images : arborescence par dossier, colonnes d'estimation intégrées
         self._image_panel = ImageTreePanel(self._settings.get("theme", "dark"))
+        self._image_panel.set_column_widths(self._settings.get("image_columns"))
         self._image_panel.selection_changed.connect(self._update_convert_btn)
         self._image_panel.running_changed.connect(self._on_estimate_running)
         self._image_panel.activity_changed.connect(self._schedule_place_activity)
@@ -824,6 +828,78 @@ class MainWindow(QMainWindow):
     _REFRESH_TIP_PENDING = ("Les formats cochés ont changé\n"
                             "Cliquez pour mettre à jour la liste.")
 
+    def _make_recent_filter(self) -> QWidget:
+        """[✓] Ignorer les images de moins de [48] h  (date de création)."""
+        box = QWidget()
+        box.setStyleSheet("background: transparent;")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._chk_recent = QCheckBox("Ignorer les images de moins de")
+        self._chk_recent.setChecked(bool(self._settings.get("image_skip_recent", False)))
+        tip = ("Écarte de la liste les images créées il y a moins de N heures —\n"
+               "notamment celles que l'app vient de produire : une image convertie\n"
+               "garde sa date de modification d'origine, mais sa date de création\n"
+               "est celle de la conversion. Évite de recompresser ce qui l'est déjà.")
+        self._chk_recent.setToolTip(tip)
+        self._edit_recent = QLineEdit(str(self._settings.get("image_recent_hours", 48)))
+        self._edit_recent.setValidator(QIntValidator(1, 9999, self._edit_recent))
+        self._edit_recent.setFixedSize(48, 28)
+        self._edit_recent.setStyleSheet("padding: 0 4px;")
+        self._edit_recent.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._edit_recent.setToolTip(tip)
+        lbl = QLabel("h")
+        lbl.setStyleSheet("background: transparent;")
+        lay.addWidget(self._chk_recent)
+        lay.addWidget(self._edit_recent)
+        lay.addWidget(lbl)
+        self._chk_recent.toggled.connect(self._on_recent_filter_changed)
+        self._edit_recent.editingFinished.connect(self._on_recent_filter_changed)
+        return box
+
+    def _recent_cutoff(self):
+        """Horodatage limite (images créées après → ignorées), ou None."""
+        chk = getattr(self, "_chk_recent", None)
+        if self._mode != "image" or chk is None or not chk.isChecked():
+            return None
+        try:
+            hours = max(1, int(self._edit_recent.text()))
+        except ValueError:
+            hours = 48
+        import time
+        return time.time() - hours * 3600
+
+    def _apply_recent_filter(self):
+        raw = getattr(self, "_files_raw", None)
+        if raw is None:
+            return 0
+        cutoff = self._recent_cutoff()
+        self._files = raw if cutoff is None else [f for f in raw if f.date_created < cutoff]
+        return len(raw) - len(self._files)
+
+    def _on_recent_filter_changed(self, *_):
+        self._settings["image_skip_recent"] = self._chk_recent.isChecked()
+        try:
+            self._settings["image_recent_hours"] = max(1, int(self._edit_recent.text()))
+        except ValueError:
+            pass
+        if getattr(self, "_files_raw", None) is None or self._busy_state():
+            return
+        self._image_panel.cancel_estimate(silent=True)
+        n_hidden = self._apply_recent_filter()
+        self._refresh_list()
+        self._report_scan_count(self._dir_edit.text().strip(), n_hidden)
+
+    def _busy_state(self) -> bool:
+        return bool(self._thread and self._thread.isRunning())
+
+    def _report_scan_count(self, path, n_hidden):
+        n = len(self._files)
+        msg = f"{n} fichier(s) trouvé(s) dans {path}"
+        if n_hidden:
+            msg += f"  —  {n_hidden} ignoré(s) car créé(s) il y a moins de {self._edit_recent.text()} h"
+        self._set_status(msg)
+
     def _on_formats_changed(self, *_):
         """Formats cochés ≠ ceux de la liste affichée → le bouton Actualiser clignote."""
         pending = (self._scanned_exts is not None
@@ -928,6 +1004,7 @@ class MainWindow(QMainWindow):
         token = self._scan_token
         self._image_panel.cancel_estimate(silent=True)
         self._files = []
+        self._files_raw = None
         self._refresh_list()                # l'ancien contenu disparaît tout de suite
         self._lbl_count.setText("Chargement…")
         self._scan_overlay.start(path, "images trouvées" if self._mode == "image"
@@ -970,13 +1047,15 @@ class MainWindow(QMainWindow):
                 f for f in self._files
                 if excl not in (part.lower() for part in
                                 os.path.relpath(os.path.dirname(f.path), root).split(os.sep))]
+        self._files_raw = self._files
+        n_hidden = self._apply_recent_filter()
         self._set_refresh_pulse(False)
         self._remember_directory(path)
         self._refresh_list()
 
         n = len(self._files)
-        self._set_status(f"{n} fichier(s) trouvé(s) dans {path}")
-        get_app_logger().info("Scan: %d fichiers dans %s", n, path)
+        self._report_scan_count(path, n_hidden)
+        get_app_logger().info("Scan: %d fichiers dans %s (%d récents ignorés)", n, path, n_hidden)
         if callable(then):
             then()
 
@@ -1485,6 +1564,7 @@ class MainWindow(QMainWindow):
         self._mode = mode
         self._settings["mode"] = mode
         self._files = []
+        self._files_raw = None
         self._scanned_exts = None
         self._set_refresh_pulse(False)
         self._image_panel.cancel_estimate(silent=True)
@@ -1598,7 +1678,7 @@ class MainWindow(QMainWindow):
         self._lbl_estimate.setText(f"Estimation en cours…  ({len(files)} image(s))")
         self._estimate_thread = EstimateThread(
             files, fmt, quality, max_side, keep,
-            parallel=os.cpu_count() or 4,
+            parallel=self._settings.get("parallel", 0),
         )
         self._estimate_thread.finished_estimate.connect(self._on_estimate)
         self._estimate_thread.finished.connect(self._on_estimate_thread_finished)
@@ -1656,7 +1736,7 @@ class MainWindow(QMainWindow):
                                  and self._start_estimate())
             return
         fmt, quality, max_side, keep = self._image_options()
-        parallel = self._settings.get("parallel", 8) or (os.cpu_count() or 4)
+        parallel = self._settings.get("parallel", 0)
         self._image_panel.start_estimate(fmt, quality, max_side, keep, parallel)
 
     def _on_estimate_running(self, running: bool):
@@ -1731,7 +1811,7 @@ class MainWindow(QMainWindow):
             self._estimate_thread.cancel()
 
         # Get parallel setting
-        parallel = self._settings.get("parallel", 8)
+        parallel = self._settings.get("parallel", 0)
         delete   = self._chk_delete.isChecked()
         self._set_busy(True)
 
@@ -1980,6 +2060,12 @@ class MainWindow(QMainWindow):
                 s.update(json.load(f))
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+        if not s.get("parallel_v32"):
+            # Jusqu'à la v31, 8 conversions par défaut : passage en automatique
+            # (tous les cœurs) maintenant que l'encodage se fait en processus
+            if s.get("parallel") == 8:
+                s["parallel"] = 0
+            s["parallel_v32"] = True
         return s
 
     def _save_settings(self):
@@ -1989,6 +2075,8 @@ class MainWindow(QMainWindow):
                 name for name, cb in checks.items() if cb.isChecked()
             ]
 
+        if getattr(self, "_image_panel", None) is not None:
+            self._settings["image_columns"] = self._image_panel.column_widths()
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self._settings, f, indent=2, ensure_ascii=False)
@@ -2111,4 +2199,6 @@ class MainWindow(QMainWindow):
                 th.wait(3000)
         if self._log_window:
             self._log_window.close()
+        from core import proc_pool
+        proc_pool.shutdown()
         super().closeEvent(event)

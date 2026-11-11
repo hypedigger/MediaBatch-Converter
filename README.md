@@ -25,7 +25,8 @@ Switch between **🎵 Audio** and **🖼 Images** from the title bar (the app re
 - **"Subfolder"** (`Reduced` by default) — writes the converted images to a subfolder created next to each original (`Holidays\Reduced\photo.jpg`). These output folders are left out of the file list, so they are never converted twice.
 - **Live size estimate** of the selection (`383 MB → ≈ 66 MB, −83 % (± 5 %)`), updated as you move the quality slider.
 - **Folder view**: images are grouped by folder, folders start collapsed (images sitting directly in the chosen folder are listed on their own). Tick a folder to select all its images.
-- **Estimate space savings** (teal button): fills the *Estimated / Gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time; click again to stop.
+- **Estimate space savings** (teal button): fills the *Compressed size / Estimated gain / Gain % / Margin* columns right in the list, for every folder and every image — gain % colour-coded from *worth it* (green) to *barely useful* (red), images used as test conversions marked *measured*. A live activity line shows what is being done; sort any column at any time, drag column borders to resize them (widths are remembered); click again to stop.
+- **Skip images newer than [48] h** (next to the format boxes): hides images created in the last N hours — typically the ones the app just produced. A converted image keeps the photo's original *modified* date, but its *created* date is set to the conversion time, so already-compressed files are easy to leave out of the next pass (and of the estimate).
 - **Gain ≥ [30] %** (next to the select-all box): once the estimate is done, ticks every folder whose estimated gain reaches the threshold (editable, 30 % by default; press Enter to apply) and unticks the rest — convert only where it's worth it.
 - When you pick a folder, a small notification offers to estimate the savings — ignore it and it fades away after a few seconds (it also disappears as soon as you start the estimate from the main button).
 
@@ -39,7 +40,7 @@ On a hard drive, reading every header costs one disk seek per file. For folders 
 
 ## Features (Audio mode)
 
-- **Batch conversion** of a whole folder tree, in parallel (all CPU cores).
+- **Batch conversion** of a whole folder tree, in parallel on all CPU cores — images are encoded in separate worker processes (low priority, so the PC stays responsive), several times faster than a threaded encoder.
 - **Formats**: FLAC, WAV, APE, OGG, M4A, WMA, AIFF… → MP3, OGG, Opus, and more, with per-format quality settings.
 - **Tags & cover art preserved** through conversion (mutagen + FFmpeg).
 - **Tag editor** with batch editing, filename-pattern deduction (`Artist - Title`…), and **MusicBrainz auto-tagging** (official API, rate-limit friendly).

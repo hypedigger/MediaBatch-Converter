@@ -193,5 +193,4 @@ class ConversionThread(QThread):
 
     @staticmethod
     def _auto_parallel() -> int:
-        cpu = os.cpu_count() or 4
-        return min(max(cpu // 2, 4), 16)
+        return max(1, (os.cpu_count() or 4) - 1)     # tous les cœurs sauf un

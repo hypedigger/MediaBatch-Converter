@@ -31,7 +31,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from core.image_codec import encode_image, target_size
+from core.image_codec import target_size
+from core             import proc_pool
 from core.scanner     import FileInfo
 from core.logger      import get_app_logger
 
@@ -125,7 +126,7 @@ def _encoded_size(fi: FileInfo, out_fmt: Dict[str, Any], quality: int,
         if key in _encode_cache:
             return _encode_cache[key]
     try:
-        n = len(encode_image(fi.path, out_fmt, quality, max_side))
+        n = proc_pool.size(fi.path, out_fmt, quality, max_side)
     except Exception:
         n = None
     with _lock:
@@ -476,16 +477,20 @@ class EstimateThread(QThread):
     def __init__(self, files, out_fmt, quality, max_side, keep_if_larger, parallel):
         super().__init__()
         self._args      = (files, out_fmt, quality, max_side, keep_if_larger)
-        self._parallel  = parallel
+        self._parallel  = proc_pool.worker_count(parallel)
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
-        with ThreadPoolExecutor(max_workers=self._parallel) as ex:
-            est = estimate_files(*self._args, executor=ex,
-                                 cancelled=lambda: self._cancelled)
+        proc_pool.acquire(self._parallel)
+        try:
+            with ThreadPoolExecutor(max_workers=self._parallel) as ex:
+                est = estimate_files(*self._args, executor=ex,
+                                     cancelled=lambda: self._cancelled)
+        finally:
+            proc_pool.release()
         if not self._cancelled:
             self.finished_estimate.emit(est)
 
@@ -504,7 +509,7 @@ class GroupEstimateThread(QThread):
         super().__init__()
         self._groups    = groups
         self._opts      = (out_fmt, quality, max_side, keep_if_larger)
-        self._parallel  = parallel
+        self._parallel  = proc_pool.worker_count(parallel)
         self._cancelled = False
         # Activité, lue par l'interface via snapshot() (simples compteurs)
         self._lock      = threading.Lock()
@@ -569,6 +574,13 @@ class GroupEstimateThread(QThread):
                 self._current.pop("tendance commune", None)
 
     def run(self):
+        proc_pool.acquire(self._parallel)
+        try:
+            self._run()
+        finally:
+            proc_pool.release()
+
+    def _run(self):
         by_dir = self._groups
         prior = self._learn_prior()
         if self._cancelled:

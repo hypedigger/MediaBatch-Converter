@@ -70,7 +70,11 @@ def _duration(sec: float) -> str:
 
 (C_NAME, C_COUNT, C_SIZE, C_DATE, C_EXT,
  C_EST, C_GAIN, C_PCT, C_MARGIN) = range(9)
-_HEADERS = ["Nom", "Images", "Taille", "Date", "Ext.", "Estimé", "Gain", "Gain %", "Marge"]
+_HEADERS = ["Nom", "Images", "Taille", "Date", "Ext.", "Taille compressée", "Gain estimé",
+            "Gain %", "Marge"]
+_DEFAULT_WIDTHS = {C_COUNT: 70, C_SIZE: 88, C_DATE: 130, C_EXT: 70,
+                   C_EST: 150, C_GAIN: 110, C_PCT: 72, C_MARGIN: 86}
+_MIN_WIDTH = 40
 _EST_COLS = (C_EST, C_GAIN, C_PCT, C_MARGIN)
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _CENTER = Qt.AlignmentFlag.AlignCenter
@@ -230,10 +234,14 @@ class ImageTreePanel(QWidget):
         hdr = self._tree.header()
         hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(C_NAME, QHeaderView.ResizeMode.Stretch)
-        for col, w in ((C_COUNT, 70), (C_SIZE, 88), (C_DATE, 130), (C_EXT, 60),
-                       (C_EST, 95), (C_GAIN, 88), (C_PCT, 72), (C_MARGIN, 86)):
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+        hdr.setMinimumSectionSize(_MIN_WIDTH)
+        # Colonnes redimensionnables à la souris (double-clic sur le séparateur :
+        # largeur ajustée au contenu) ; largeurs mémorisées dans les réglages
+        for col, w in _DEFAULT_WIDTHS.items():
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
             self._tree.setColumnWidth(col, w)
+        self._tree.headerItem().setToolTip(C_EST, "Poids estimé des images après conversion")
+        self._tree.headerItem().setToolTip(C_GAIN, "Espace libéré estimé (taille actuelle − taille compressée)")
         for col in range(1, len(_HEADERS)):
             self._tree.headerItem().setTextAlignment(col, _CENTER)
         self._tree.itemChanged.connect(self._on_item_changed)
@@ -292,7 +300,8 @@ class ImageTreePanel(QWidget):
                 last = max(f.date_created for f in group)
                 folder.set(C_DATE, datetime.fromtimestamp(last).strftime("%d/%m/%Y  %H:%M"), last)
                 exts = sorted({f.extension.upper() for f in group})
-                folder.set(C_EXT, ", ".join(exts) if len(exts) < 3 else "…", None, _CENTER)
+                folder.set(C_EXT, ", ".join(exts), None, _CENTER)
+                folder.setToolTip(C_EXT, ", ".join(exts))
                 tree.addTopLevelItem(folder)
 
             items = []
@@ -410,6 +419,15 @@ class ImageTreePanel(QWidget):
         self._refresh_activity()
         self.running_changed.emit(True)
 
+    def column_widths(self) -> dict:
+        return {str(c): self._tree.columnWidth(c) for c in _DEFAULT_WIDTHS}
+
+    def set_column_widths(self, widths: dict):
+        for c in _DEFAULT_WIDTHS:
+            w = (widths or {}).get(str(c))
+            if isinstance(w, int) and w >= _MIN_WIDTH:
+                self._tree.setColumnWidth(c, w)
+
     def cancel_estimate(self, silent: bool = False):
         th = self._thread
         if th and th.isRunning():
@@ -436,7 +454,7 @@ class ImageTreePanel(QWidget):
             self._spinner.set_state("idle")
             self._set_activity(
                 "Réglages modifiés : cliquez sur « Estimer le gain d'espace » pour mettre à jour "
-                "les colonnes Estimé / Gain.")
+                "les colonnes Taille compressée / Gain estimé.")
 
     def _clear_estimates(self):
         self._tree.setSortingEnabled(False)
