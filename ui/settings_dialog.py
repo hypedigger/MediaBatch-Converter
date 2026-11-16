@@ -4,8 +4,9 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
                               QCheckBox)
 from PyQt6.QtGui     import QFont
 
-from core.config import PARALLEL_OPTIONS
+from core.config import PARALLEL_OPTIONS, KOFI_URL
 from ui.effects  import apply_acrylic
+from ui.support_dialog import open_kofi
 
 
 class SettingsDialog(QDialog):
@@ -110,6 +111,11 @@ class SettingsDialog(QDialog):
 
         # ── Buttons ────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
+
+        btn_kofi = QPushButton("☕  Soutenir sur Ko-fi")
+        btn_kofi.setToolTip(KOFI_URL)
+        btn_kofi.clicked.connect(open_kofi)
+        btn_row.addWidget(btn_kofi)
         btn_row.addStretch()
 
         btn_cancel = QPushButton("Annuler")

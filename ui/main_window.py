@@ -29,6 +29,7 @@ from ui.effects     import apply_acrylic
 from ui.icon        import create_app_icon
 from ui.log_window  import LogWindow
 from ui.settings_dialog import SettingsDialog
+from ui.support_dialog import SupportDialog, open_kofi, support_due
 from ui.tag_editor_dialog import TagEditorDialog
 from ui.preview_player import PreviewPlayer
 from ui.image_tree  import ImageTreePanel, fmt_bytes, gain_color
@@ -201,6 +202,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._settings      = self._load_settings()
+        # Invitation Ko-fi : quelques secondes après l'ouverture, sans bloquer
+        if support_due(self._bump_usage_count(),
+                       bool(self._settings.get("support_optout", False))):
+            QTimer.singleShot(2500, self._show_support_popup)
         self._files: List[FileInfo] = []
         self._thread: Optional[ConversionThread] = None
         self._playing_path  = ""           # fichier en cours de pré-écoute
@@ -2021,6 +2026,33 @@ class MainWindow(QMainWindow):
         if self._log_window:
             self._log_window.apply_stylesheet(self.styleSheet())
 
+
+    # ── Soutien (Ko-fi) ───────────────────────────────────────────────────────
+
+    def _bump_usage_count(self) -> int:
+        """Compte les lancements (config.json) et renvoie le nouveau total."""
+        try:
+            n = int(self._settings.get("usage_count", 0)) + 1
+        except (TypeError, ValueError):
+            n = 1
+        self._settings["usage_count"] = n
+        self._save_settings()
+        return n
+
+    def _show_support_popup(self):
+        """Invitation Ko-fi — fermable d'un clic, avec opt-out définitif."""
+        if QApplication.activeModalWidget() is not None:
+            # Un dialogue est déjà ouvert (réglages…) : on repasse plus tard
+            QTimer.singleShot(2500, self._show_support_popup)
+            return
+        dlg = SupportDialog(self._settings.get("theme", "dark"), self)
+        dlg.setStyleSheet(self.styleSheet())
+        dlg.exec()
+        if dlg.optout_checked():
+            self._settings["support_optout"] = True
+            self._save_settings()
+        if dlg.kofi_chosen():
+            open_kofi()
 
     def _apply_theme(self):
         theme = self._settings.get("theme", "dark")

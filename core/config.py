@@ -2,8 +2,8 @@ import os
 import sys
 
 # !! IMPORTANT : incrémenter APP_VERSION à chaque modification du code !!
-APP_VERSION = 35
-APP_DATE = "11/11/2026"
+APP_VERSION = 36
+APP_DATE = "16/11/2026"
 APP_TITLE = f"MediaBatch Converter  —  v{APP_VERSION}  —  {APP_DATE}"
 
 if getattr(sys, "frozen", False):
@@ -14,6 +14,8 @@ else:
 FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg_bin")
 LOGS_DIR   = os.path.join(BASE_DIR, "logs")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+
+KOFI_URL = "https://ko-fi.com/hypedigger"
 
 FFMPEG_DOWNLOAD_URL = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
@@ -199,4 +201,7 @@ DEFAULT_SETTINGS = {
     # JPEG progressif : ~3 % plus léger mais ~2× plus long à encoder (mesuré
     # sur des photos 21 Mpx) → désactivé par défaut, JPEG standard optimisé
     "jpeg_progressive":      False,      # son + notification Windows en fin de tâche
+    # Invitation Ko-fi : au 10e lancement puis tous les 100, sauf opt-out
+    "usage_count":           0,
+    "support_optout":        False,
 }

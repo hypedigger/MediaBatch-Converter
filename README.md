@@ -104,6 +104,8 @@ If this tool saves you time, you can support its development on [Ko-fi](https://
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/hypedigger)
 
+The same link is in the app's Settings dialog. The app also shows a small reminder on the 10th launch, then every 100 launches — one click closes it, and *Don't ask me again* turns it off for good.
+
 ## Credits
 
 UI icons are based on [Lucide](https://lucide.dev) (ISC License, © Lucide Contributors).
